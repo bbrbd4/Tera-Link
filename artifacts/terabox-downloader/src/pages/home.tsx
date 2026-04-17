@@ -55,7 +55,7 @@ export default function Home() {
     setResult(null);
 
     try {
-      const apiUrl = `https://gold-newt-367030.hostingersite.com/tera.php?url=${encodeURIComponent(trimmed)}`;
+      const apiUrl = `/api/terabox?url=${encodeURIComponent(trimmed)}`;
       const res = await fetch(apiUrl);
       if (!res.ok) {
         throw new Error(`Server responded with status ${res.status}`);
