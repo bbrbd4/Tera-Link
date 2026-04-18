@@ -465,9 +465,6 @@ export default function Home() {
             Warning &mdash; এই শুধু মাত্র ১৯/২০ দেখার জন্য তৈরি করা হয়েছে।
           </span>
         </div>
-        <p className="text-xs text-muted-foreground mt-1">
-          bb8_bd চাপ দিলে টেলিগ্রামে নিয়ে যাবে
-        </p>
       </footer>
     </div>
   );
