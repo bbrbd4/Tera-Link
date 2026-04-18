@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Download, Play, FileVideo, HardDrive, Clock, Link2, AlertCircle, Loader2, Copy, Check, Zap, Shield, Globe, Bot, Power, ExternalLink, Eye, EyeOff } from "lucide-react";
+import { Download, Play, FileVideo, HardDrive, Clock, Link2, AlertCircle, Loader2, Copy, Check, Zap, Shield, Globe, Bot, Power, ExternalLink, Eye, EyeOff, FolderOpen, ChevronDown, ChevronUp } from "lucide-react";
 
 interface FileData {
   file_name: string;
@@ -25,7 +25,7 @@ interface ApiResponse {
 interface LinkResult {
   url: string;
   status: "loading" | "success" | "error";
-  data?: FileData;
+  files?: FileData[];
   error?: string;
 }
 
@@ -143,7 +143,8 @@ export default function Home() {
   const isValidTeraboxUrl = (u: string) => {
     try {
       const parsed = new URL(u);
-      return parsed.hostname.includes("terabox") || parsed.hostname.includes("1024terabox") || parsed.hostname.includes("mirrobox") || u.includes("terabox");
+      const host = parsed.hostname.toLowerCase();
+      return /(terabox|1024terabox|mirrobox|teraboxshare|terasharelink|nephobox|momerybox|tibibox|4funbox|teraboxapp|teraboxlink)/.test(host);
     } catch {
       return false;
     }
@@ -169,7 +170,7 @@ export default function Home() {
       if (!json.success || !json.data || json.data.length === 0) {
         throw new Error("Could not fetch file data. The link may be invalid or expired.");
       }
-      return { url, status: "success", data: json.data[0] };
+      return { url, status: "success", files: json.data };
     } catch (err: unknown) {
       let msg = "An unexpected error occurred.";
       if (err instanceof DOMException && err.name === "AbortError") {
@@ -798,10 +799,29 @@ function ResultCard({ result, index, copiedUrl, onCopy, formatBytes, getStreamUr
   }
 
   // Success state
-  if (!result.data) {
+  if (!result.files || result.files.length === 0) {
     return null;
   }
-  const data = result.data;
+  const files = result.files;
+
+  // Folder view (multiple files)
+  if (files.length > 1) {
+    return (
+      <FolderCard
+        files={files}
+        shareUrl={result.url}
+        index={index}
+        copiedUrl={copiedUrl}
+        onCopy={onCopy}
+        formatBytes={formatBytes}
+        getStreamUrl={getStreamUrl}
+        hasStream={hasStream}
+      />
+    );
+  }
+
+  // Single-file view
+  const data = files[0]!;
   return (
     <div
       className="w-full rounded-2xl border border-card-border bg-card overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-400"
@@ -933,6 +953,185 @@ function ResultCard({ result, index, copiedUrl, onCopy, formatBytes, getStreamUr
             </button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+interface FolderCardProps {
+  files: FileData[];
+  shareUrl: string;
+  index: number;
+  copiedUrl: string | null;
+  onCopy: (text: string) => void;
+  formatBytes: (bytes: number) => string;
+  getStreamUrl: (data: FileData) => string;
+  hasStream: (data: FileData) => boolean;
+}
+
+function FolderCard({
+  files,
+  shareUrl,
+  index,
+  copiedUrl,
+  onCopy,
+  formatBytes,
+  getStreamUrl,
+  hasStream,
+}: FolderCardProps) {
+  const [expanded, setExpanded] = useState(true);
+  const totalBytes = files.reduce((sum, f) => sum + (Number(f.file_size_bytes) || 0), 0);
+
+  return (
+    <div
+      className="w-full rounded-2xl border border-card-border bg-card overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-400"
+      style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.4)", animationDelay: `${index * 50}ms` }}
+    >
+      {/* Folder header */}
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full flex items-center gap-4 p-5 border-b border-border hover:bg-secondary/30 transition-colors text-left"
+      >
+        <div
+          className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0"
+          style={{
+            background: "linear-gradient(135deg, hsl(271 81% 56%), hsl(217 91% 60%))",
+            boxShadow: "0 4px 16px hsl(271 81% 56% / 0.3)",
+          }}
+        >
+          <FolderOpen className="w-6 h-6 text-white" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="font-semibold text-foreground text-sm">
+            Folder &middot; {files.length} files
+          </p>
+          <p className="text-xs text-muted-foreground truncate" title={shareUrl}>
+            {totalBytes > 0 ? formatBytes(totalBytes) : ""} {totalBytes > 0 ? "· " : ""}{shareUrl}
+          </p>
+        </div>
+        {expanded ? (
+          <ChevronUp className="w-5 h-5 text-muted-foreground shrink-0" />
+        ) : (
+          <ChevronDown className="w-5 h-5 text-muted-foreground shrink-0" />
+        )}
+      </button>
+
+      {/* File list */}
+      {expanded && (
+        <div className="divide-y divide-border">
+          {files.map((file, i) => (
+            <FolderFileRow
+              key={`${file.share_id}-${i}`}
+              file={file}
+              copiedUrl={copiedUrl}
+              onCopy={onCopy}
+              formatBytes={formatBytes}
+              getStreamUrl={getStreamUrl}
+              hasStream={hasStream}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface FolderFileRowProps {
+  file: FileData;
+  copiedUrl: string | null;
+  onCopy: (text: string) => void;
+  formatBytes: (bytes: number) => string;
+  getStreamUrl: (data: FileData) => string;
+  hasStream: (data: FileData) => boolean;
+}
+
+function FolderFileRow({
+  file,
+  copiedUrl,
+  onCopy,
+  formatBytes,
+  getStreamUrl,
+  hasStream,
+}: FolderFileRowProps) {
+  return (
+    <div className="flex flex-col sm:flex-row gap-4 p-4">
+      {/* Thumbnail */}
+      {file.thumbnail ? (
+        <div className="w-full sm:w-28 h-32 sm:h-20 rounded-lg overflow-hidden shrink-0 border border-border bg-muted">
+          <img
+            src={file.thumbnail}
+            alt={file.file_name}
+            className="w-full h-full object-cover"
+            onError={(e) => {
+              (e.target as HTMLImageElement).style.display = "none";
+            }}
+          />
+        </div>
+      ) : (
+        <div className="w-full sm:w-28 h-32 sm:h-20 rounded-lg shrink-0 border border-border bg-muted flex items-center justify-center">
+          <FileVideo className="w-6 h-6 text-muted-foreground" />
+        </div>
+      )}
+
+      {/* Info + actions */}
+      <div className="flex-1 min-w-0 flex flex-col gap-2">
+        <p className="text-sm font-medium text-foreground truncate" title={file.file_name}>
+          {file.file_name}
+        </p>
+        <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1">
+            <HardDrive className="w-3 h-3 text-primary/70" />
+            {file.file_size || formatBytes(file.file_size_bytes)}
+          </span>
+          {file.duration && file.duration !== "00:00" && (
+            <span className="flex items-center gap-1">
+              <Clock className="w-3 h-3 text-primary/70" />
+              {file.duration}
+            </span>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-2 mt-1">
+          {file.download_url && (
+            <a
+              href={file.download_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all duration-200 hover:opacity-90 active:scale-[0.98]"
+              style={{
+                background: "linear-gradient(135deg, hsl(217 91% 60%), hsl(217 91% 50%))",
+                color: "hsl(222 47% 8%)",
+              }}
+            >
+              <Download className="w-3.5 h-3.5" />
+              Download
+            </a>
+          )}
+          {hasStream(file) && (
+            <a
+              href={getStreamUrl(file)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border border-border bg-secondary hover:bg-accent text-secondary-foreground transition-all duration-200 hover:border-primary/30 active:scale-[0.98]"
+            >
+              <Play className="w-3.5 h-3.5" />
+              Stream
+            </a>
+          )}
+          {file.download_url && (
+            <button
+              onClick={() => onCopy(file.download_url)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-input bg-secondary hover:bg-accent text-secondary-foreground transition-all duration-200"
+              title="Copy download URL"
+            >
+              {copiedUrl === file.download_url ? (
+                <Check className="w-3.5 h-3.5 text-green-400" />
+              ) : (
+                <Copy className="w-3.5 h-3.5" />
+              )}
+              Copy link
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

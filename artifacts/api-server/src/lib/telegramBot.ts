@@ -265,9 +265,41 @@ async function handleUpdate(state: BotState, update: TgUpdate): Promise<void> {
   for (const url of urls) {
     try {
       const result = await fetchTeraboxInfo(url);
-      const file = result.data[0];
-      await sendFileResult(state.token, chatId, file);
-      processedHere += 1;
+      const filesInLink = result.data || [];
+      if (filesInLink.length === 0) {
+        throw new Error("No files found in this link.");
+      }
+
+      // Folder support: announce when there are multiple files
+      if (filesInLink.length > 1) {
+        await tgCall(state.token, "sendMessage", {
+          chat_id: chatId,
+          text:
+            `📂 *Folder detected* \\- ${filesInLink.length} files\n` +
+            `Sending each file below\\.\\.\\.`,
+          parse_mode: "MarkdownV2",
+        }).catch(() => {});
+      }
+
+      // Send each file (max 25 per folder to avoid spam / Telegram rate limits)
+      const MAX_PER_FOLDER = 25;
+      const toSend = filesInLink.slice(0, MAX_PER_FOLDER);
+      for (const file of toSend) {
+        try {
+          await sendFileResult(state.token, chatId, file);
+          processedHere += 1;
+        } catch (err) {
+          state.errors += 1;
+          logger.error({ err, bot: state.username }, "Failed to send a file in folder");
+        }
+      }
+      if (filesInLink.length > MAX_PER_FOLDER) {
+        await tgCall(state.token, "sendMessage", {
+          chat_id: chatId,
+          text: `ℹ️ Folder has ${filesInLink.length} files. Showing the first ${MAX_PER_FOLDER}. Open the original link for the rest.`,
+          disable_web_page_preview: true,
+        }).catch(() => {});
+      }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : "Unknown error";
       await tgCall(state.token, "sendMessage", {
