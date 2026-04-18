@@ -295,13 +295,39 @@ async function sendFileResult(
   file: TeraboxFileData,
 ): Promise<void> {
   const streamUrl = file.stream_final_url || file.new_stream_url || file.stream_url || "";
-  const caption =
+  const isVideo = /\.(mp4|mkv|mov|webm|m4v|avi)$/i.test(file.file_name) ||
+    (file.extension && /^(mp4|mkv|mov|webm|m4v|avi)$/i.test(file.extension));
+
+  // Telegram Bot API: sending media by URL only works reliably up to ~20MB.
+  const TG_URL_VIDEO_LIMIT = 20 * 1024 * 1024;
+  const sizeBytes = Number(file.file_size_bytes) || 0;
+  const canSendDirectly =
+    isVideo &&
+    !!file.download_url &&
+    sizeBytes > 0 &&
+    sizeBytes <= TG_URL_VIDEO_LIMIT;
+
+  const baseCaption =
     `📁 *${escapeMdV2(file.file_name)}*\n` +
     `📦 Size: ${escapeMdV2(file.file_size || "")}` +
     (file.duration && file.duration !== "00:00"
       ? `\n⏱ Duration: ${escapeMdV2(file.duration)}`
       : "");
 
+  // 1) Try to send the actual video for small files
+  if (canSendDirectly) {
+    const video = await tgCall(token, "sendVideo", {
+      chat_id: chatId,
+      video: file.download_url,
+      caption: baseCaption,
+      parse_mode: "MarkdownV2",
+      supports_streaming: true,
+    });
+    if (video.ok) return;
+    // fall through to link-based reply
+  }
+
+  // 2) Otherwise (or on failure) reply with thumbnail + buttons
   const inlineKeyboard: { text: string; url: string }[][] = [];
   if (file.download_url) {
     inlineKeyboard.push([{ text: "⬇️ Download", url: file.download_url }]);
@@ -312,12 +338,16 @@ async function sendFileResult(
   if (file.share_url) {
     inlineKeyboard.push([{ text: "🔗 Share Page", url: file.share_url }]);
   }
-
   const replyMarkup = inlineKeyboard.length > 0
     ? { inline_keyboard: inlineKeyboard }
     : undefined;
 
-  // Try sending with thumbnail; fall back to text-only on failure
+  const tooLargeNote =
+    isVideo && sizeBytes > TG_URL_VIDEO_LIMIT
+      ? `\n\n_File is larger than 20MB \\- Telegram bots can't send it directly\\. Use the buttons below\\._`
+      : "";
+  const caption = baseCaption + tooLargeNote;
+
   if (file.thumbnail) {
     const photo = await tgCall(token, "sendPhoto", {
       chat_id: chatId,
