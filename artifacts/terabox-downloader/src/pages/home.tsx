@@ -157,9 +157,11 @@ export default function Home() {
   };
 
   const fetchOne = async (url: string): Promise<LinkResult> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30000);
     try {
       const apiUrl = `/api/terabox?url=${encodeURIComponent(url)}`;
-      const res = await fetch(apiUrl);
+      const res = await fetch(apiUrl, { signal: controller.signal });
       if (!res.ok) {
         throw new Error(`Server responded with status ${res.status}`);
       }
@@ -170,12 +172,16 @@ export default function Home() {
       return { url, status: "success", data: json.data[0] };
     } catch (err: unknown) {
       let msg = "An unexpected error occurred.";
-      if (err instanceof TypeError && err.message.includes("fetch")) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        msg = "Request timed out after 30s. The link may be slow or invalid.";
+      } else if (err instanceof TypeError && err.message.includes("fetch")) {
         msg = "Network error. Please try again.";
       } else if (err instanceof Error) {
         msg = err.message;
       }
       return { url, status: "error", error: msg };
+    } finally {
+      clearTimeout(timer);
     }
   };
 
@@ -205,8 +211,27 @@ export default function Home() {
     setLoading(true);
     setResults(valid.map((url) => ({ url, status: "loading" })));
 
-    const fetched = await Promise.all(valid.map(fetchOne));
-    setResults(fetched);
+    // Process with limited concurrency so we don't overwhelm the upstream API,
+    // and update each result as it finishes so the UI stays responsive.
+    const CONCURRENCY = 3;
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < valid.length) {
+        const i = cursor++;
+        const url = valid[i]!;
+        const result = await fetchOne(url);
+        setResults((prev) => {
+          const next = prev.slice();
+          next[i] = result;
+          return next;
+        });
+      }
+    };
+    const workers = Array.from(
+      { length: Math.min(CONCURRENCY, valid.length) },
+      () => worker(),
+    );
+    await Promise.all(workers);
     setLoading(false);
   };
 
@@ -773,7 +798,10 @@ function ResultCard({ result, index, copiedUrl, onCopy, formatBytes, getStreamUr
   }
 
   // Success state
-  const data = result.data!;
+  if (!result.data) {
+    return null;
+  }
+  const data = result.data;
   return (
     <div
       className="w-full rounded-2xl border border-card-border bg-card overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-400"
