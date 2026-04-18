@@ -442,29 +442,21 @@ export default function Home() {
       </div>
 
       {/* Footer */}
-      <footer className="relative z-10 text-center py-6 px-4 border-t border-border/50 flex flex-col items-center gap-2">
-        <div className="flex items-center gap-2 text-sm">
-          <span className="text-muted-foreground">Powered by</span>
-          <a
-            href="https://t.me/bb8_bd"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 font-semibold px-3 py-1 rounded-full transition-all duration-200 hover:opacity-90 active:scale-95"
-            style={{
-              background: "linear-gradient(135deg, hsl(217 91% 60%), hsl(271 81% 56%))",
-              color: "hsl(222 47% 8%)",
-              boxShadow: "0 2px 12px hsl(217 91% 60% / 0.35)",
-            }}
-          >
-            bb8_bd
-          </a>
-        </div>
-        <div className="flex items-start gap-1.5 text-xs text-amber-400/90 max-w-md">
-          <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-          <span>
-            Warning &mdash; এই শুধু মাত্র ১৯/২০ দেখার জন্য তৈরি করা হয়েছে।
-          </span>
-        </div>
+      <footer className="relative z-10 text-center py-6 px-4 border-t border-border/50 text-sm text-muted-foreground">
+        <span>Powered by </span>
+        <a
+          href="https://t.me/bb8_bd"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-semibold bg-clip-text text-transparent hover:opacity-80 transition-opacity"
+          style={{ backgroundImage: "linear-gradient(135deg, hsl(217 91% 60%), hsl(271 81% 56%))" }}
+        >
+          bb8_bd
+        </a>
+        <span> &mdash; </span>
+        <span className="text-amber-400/90">
+          Warning এইটা শুধু মাত্র ১৯/২০ দেখার জন্য তৈরি করা হয়েছে।
+        </span>
       </footer>
     </div>
   );
