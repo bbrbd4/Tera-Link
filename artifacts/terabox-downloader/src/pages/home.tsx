@@ -329,7 +329,7 @@ export default function Home() {
                   if (globalError) setGlobalError(null);
                 }}
                 onKeyDown={handleKeyDown}
-                placeholder={"https://terabox.com/s/...\nhttps://terabox.com/s/...\nhttps://1024terabox.com/s/..."}
+                placeholder="Paste your TeraBox link(s) here..."
                 rows={4}
                 className="w-full bg-muted/50 border border-input rounded-xl px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all duration-200 resize-y min-h-[100px] font-mono"
               />
