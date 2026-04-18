@@ -1,5 +1,5 @@
-import { useState, useRef } from "react";
-import { Download, Play, FileVideo, HardDrive, Clock, Link2, AlertCircle, Loader2, Copy, Check, Zap, Shield, Globe } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { Download, Play, FileVideo, HardDrive, Clock, Link2, AlertCircle, Loader2, Copy, Check, Zap, Shield, Globe, Bot, Power, ExternalLink, Eye, EyeOff } from "lucide-react";
 
 interface FileData {
   file_name: string;
@@ -29,6 +29,15 @@ interface LinkResult {
   error?: string;
 }
 
+interface BotInfo {
+  username: string;
+  firstName: string;
+  startedAt: number;
+  processed: number;
+  errors: number;
+  tokenMask: string;
+}
+
 export default function Home() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -36,6 +45,100 @@ export default function Home() {
   const [results, setResults] = useState<LinkResult[]>([]);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Bot state
+  const [showBotSection, setShowBotSection] = useState(false);
+  const [botToken, setBotToken] = useState("");
+  const [showToken, setShowToken] = useState(false);
+  const [botLoading, setBotLoading] = useState(false);
+  const [botError, setBotError] = useState<string | null>(null);
+  const [botInfo, setBotInfo] = useState<BotInfo | null>(null);
+
+  // Restore token + status on mount
+  useEffect(() => {
+    const saved = localStorage.getItem("tb_bot_token");
+    if (saved) {
+      setBotToken(saved);
+      checkBotStatus(saved);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Poll bot status every 8 seconds while connected
+  useEffect(() => {
+    if (!botInfo || !botToken) return;
+    const id = setInterval(() => checkBotStatus(botToken), 8000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [botInfo?.username, botToken]);
+
+  const checkBotStatus = async (token: string) => {
+    try {
+      const res = await fetch("/api/bot/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      const json = await res.json();
+      if (json.success && json.running && json.bot) {
+        setBotInfo(json.bot);
+      } else {
+        setBotInfo(null);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleBotStart = async () => {
+    const token = botToken.trim();
+    if (!token) {
+      setBotError("Please paste your Telegram bot token.");
+      return;
+    }
+    setBotLoading(true);
+    setBotError(null);
+    try {
+      const res = await fetch("/api/bot/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      const json = await res.json();
+      if (!json.success) {
+        throw new Error(json.error || "Failed to start bot");
+      }
+      setBotInfo(json.bot);
+      localStorage.setItem("tb_bot_token", token);
+    } catch (err) {
+      setBotError(err instanceof Error ? err.message : "Failed to start bot");
+    } finally {
+      setBotLoading(false);
+    }
+  };
+
+  const handleBotStop = async () => {
+    if (!botToken) return;
+    setBotLoading(true);
+    setBotError(null);
+    try {
+      const res = await fetch("/api/bot/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: botToken.trim() }),
+      });
+      const json = await res.json().catch(() => ({ success: false }));
+      if (!res.ok || !json.success) {
+        throw new Error(json.error || "Failed to disconnect the bot.");
+      }
+      setBotInfo(null);
+      localStorage.removeItem("tb_bot_token");
+    } catch (err) {
+      setBotError(err instanceof Error ? err.message : "Failed to disconnect the bot.");
+    } finally {
+      setBotLoading(false);
+    }
+  };
 
   const isValidTeraboxUrl = (u: string) => {
     try {
@@ -282,6 +385,224 @@ export default function Home() {
               Tip: paste multiple links separated by new lines &middot; Press Ctrl+Enter to fetch
             </p>
           </div>
+        </div>
+
+        {/* Telegram Bot Section */}
+        <div className="w-full mb-6">
+          {!showBotSection && !botInfo && (
+            <button
+              onClick={() => setShowBotSection(true)}
+              className="w-full flex items-center justify-between gap-3 px-5 py-4 rounded-2xl border border-card-border bg-card hover:bg-secondary/50 transition-all duration-200 group"
+              style={{ boxShadow: "0 4px 16px rgba(0,0,0,0.2)" }}
+            >
+              <div className="flex items-center gap-3">
+                <div
+                  className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                  style={{
+                    background: "linear-gradient(135deg, hsl(199 89% 48%), hsl(217 91% 60%))",
+                    boxShadow: "0 2px 12px hsl(199 89% 48% / 0.3)",
+                  }}
+                >
+                  <Bot className="w-5 h-5 text-white" />
+                </div>
+                <div className="text-left">
+                  <p className="font-semibold text-sm text-foreground">Connect a Telegram Bot</p>
+                  <p className="text-xs text-muted-foreground">Use your own bot to download from Telegram</p>
+                </div>
+              </div>
+              <span className="text-xs text-primary font-medium opacity-70 group-hover:opacity-100 transition-opacity">
+                Set up &rarr;
+              </span>
+            </button>
+          )}
+
+          {(showBotSection || botInfo) && (
+            <div
+              className="w-full rounded-2xl border border-card-border bg-card p-6 animate-in fade-in slide-in-from-bottom-2 duration-300"
+              style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.4)" }}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div
+                    className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                    style={{
+                      background: botInfo
+                        ? "linear-gradient(135deg, hsl(142 71% 45%), hsl(160 71% 45%))"
+                        : "linear-gradient(135deg, hsl(199 89% 48%), hsl(217 91% 60%))",
+                      boxShadow: botInfo
+                        ? "0 2px 12px hsl(142 71% 45% / 0.3)"
+                        : "0 2px 12px hsl(199 89% 48% / 0.3)",
+                    }}
+                  >
+                    <Bot className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <p className="font-semibold text-sm text-foreground flex items-center gap-2">
+                      Telegram Bot
+                      {botInfo && (
+                        <span className="inline-flex items-center gap-1 text-xs bg-green-500/15 text-green-400 border border-green-500/25 rounded-full px-2 py-0.5 font-medium">
+                          <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                          Live
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {botInfo
+                        ? `Listening for TeraBox links`
+                        : "Bring your own bot from @BotFather"}
+                    </p>
+                  </div>
+                </div>
+                {!botInfo && (
+                  <button
+                    onClick={() => {
+                      setShowBotSection(false);
+                      setBotError(null);
+                    }}
+                    className="text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-1 rounded hover:bg-secondary"
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
+
+              {botInfo ? (
+                /* Connected state */
+                <div className="flex flex-col gap-4">
+                  <div className="rounded-xl bg-muted/40 border border-border p-4">
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">Bot</p>
+                        <p className="font-semibold text-foreground truncate">{botInfo.firstName}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">Username</p>
+                        <p className="font-mono text-primary truncate">@{botInfo.username}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">Files Sent</p>
+                        <p className="font-semibold text-foreground">{botInfo.processed}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">Errors</p>
+                        <p className="font-semibold text-foreground">{botInfo.errors}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <a
+                      href={`https://t.me/${botInfo.username}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm transition-all duration-200 hover:opacity-90 active:scale-[0.98]"
+                      style={{
+                        background: "linear-gradient(135deg, hsl(199 89% 48%), hsl(217 91% 60%))",
+                        color: "white",
+                        boxShadow: "0 4px 16px hsl(199 89% 48% / 0.3)",
+                      }}
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      Open @{botInfo.username}
+                    </a>
+                    <button
+                      onClick={handleBotStop}
+                      disabled={botLoading}
+                      className="px-4 py-3 rounded-xl border border-destructive/30 bg-destructive/10 hover:bg-destructive/20 text-destructive transition-all duration-200 flex items-center gap-2 text-sm font-medium disabled:opacity-60"
+                    >
+                      {botLoading ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Power className="w-4 h-4" />
+                      )}
+                      Disconnect
+                    </button>
+                  </div>
+
+                  <p className="text-xs text-muted-foreground text-center">
+                    Open your bot in Telegram and send any TeraBox link to get download buttons.
+                  </p>
+                </div>
+              ) : (
+                /* Setup state */
+                <div className="flex flex-col gap-3">
+                  <label className="text-xs text-muted-foreground font-medium">
+                    Bot Token (from{" "}
+                    <a
+                      href="https://t.me/BotFather"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      @BotFather
+                    </a>
+                    )
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showToken ? "text" : "password"}
+                      value={botToken}
+                      onChange={(e) => {
+                        setBotToken(e.target.value);
+                        if (botError) setBotError(null);
+                      }}
+                      placeholder="123456789:AA..."
+                      className="w-full bg-muted/50 border border-input rounded-xl pl-4 pr-12 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all duration-200 font-mono"
+                    />
+                    <button
+                      onClick={() => setShowToken((v) => !v)}
+                      type="button"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-1"
+                      tabIndex={-1}
+                    >
+                      {showToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+
+                  {botError && (
+                    <div className="flex items-center gap-2 text-destructive text-sm bg-destructive/10 border border-destructive/20 rounded-xl px-4 py-3 animate-in fade-in duration-200">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      {botError}
+                    </div>
+                  )}
+
+                  <button
+                    onClick={handleBotStart}
+                    disabled={botLoading}
+                    className="w-full py-3 rounded-xl font-semibold text-sm transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                    style={{
+                      background: botLoading
+                        ? "hsl(199 89% 48% / 0.7)"
+                        : "linear-gradient(135deg, hsl(199 89% 48%), hsl(217 91% 60%))",
+                      color: "white",
+                      boxShadow: botLoading ? "none" : "0 4px 16px hsl(199 89% 48% / 0.3)",
+                    }}
+                  >
+                    {botLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Connecting...
+                      </>
+                    ) : (
+                      <>
+                        <Bot className="w-4 h-4" />
+                        Connect Bot
+                      </>
+                    )}
+                  </button>
+
+                  <div className="rounded-xl bg-muted/40 border border-border p-3 text-xs text-muted-foreground leading-relaxed">
+                    <p className="font-semibold text-foreground mb-2">How to get a bot token:</p>
+                    <ol className="list-decimal list-inside space-y-1">
+                      <li>Open <span className="text-primary">@BotFather</span> on Telegram</li>
+                      <li>Send <span className="font-mono text-primary">/newbot</span> and follow the steps</li>
+                      <li>Copy the token and paste it above</li>
+                    </ol>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Summary bar */}
