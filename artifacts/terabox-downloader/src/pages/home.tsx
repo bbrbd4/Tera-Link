@@ -22,13 +22,20 @@ interface ApiResponse {
   channel?: string;
 }
 
+interface LinkResult {
+  url: string;
+  status: "loading" | "success" | "error";
+  data?: FileData;
+  error?: string;
+}
+
 export default function Home() {
-  const [url, setUrl] = useState("");
+  const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<FileData | null>(null);
+  const [globalError, setGlobalError] = useState<string | null>(null);
+  const [results, setResults] = useState<LinkResult[]>([]);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const isValidTeraboxUrl = (u: string) => {
     try {
@@ -39,23 +46,16 @@ export default function Home() {
     }
   };
 
-  const handleFetch = async () => {
-    const trimmed = url.trim();
-    if (!trimmed) {
-      setError("Please enter a TeraBox URL.");
-      return;
-    }
-    if (!isValidTeraboxUrl(trimmed)) {
-      setError("That doesn't look like a valid TeraBox link. Try a URL from terabox.com or 1024terabox.com.");
-      return;
-    }
+  const parseUrls = (text: string): string[] => {
+    return text
+      .split(/[\n,\s]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  };
 
-    setLoading(true);
-    setError(null);
-    setResult(null);
-
+  const fetchOne = async (url: string): Promise<LinkResult> => {
     try {
-      const apiUrl = `/api/terabox?url=${encodeURIComponent(trimmed)}`;
+      const apiUrl = `/api/terabox?url=${encodeURIComponent(url)}`;
       const res = await fetch(apiUrl);
       if (!res.ok) {
         throw new Error(`Server responded with status ${res.status}`);
@@ -64,22 +64,54 @@ export default function Home() {
       if (!json.success || !json.data || json.data.length === 0) {
         throw new Error("Could not fetch file data. The link may be invalid or expired.");
       }
-      setResult(json.data[0]);
+      return { url, status: "success", data: json.data[0] };
     } catch (err: unknown) {
+      let msg = "An unexpected error occurred.";
       if (err instanceof TypeError && err.message.includes("fetch")) {
-        setError("Network error. Please check your connection and try again.");
+        msg = "Network error. Please try again.";
       } else if (err instanceof Error) {
-        setError(err.message);
-      } else {
-        setError("An unexpected error occurred.");
+        msg = err.message;
       }
-    } finally {
-      setLoading(false);
+      return { url, status: "error", error: msg };
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") handleFetch();
+  const handleFetch = async () => {
+    const urls = parseUrls(input);
+    if (urls.length === 0) {
+      setGlobalError("Please enter at least one TeraBox URL.");
+      return;
+    }
+
+    const invalid = urls.filter((u) => !isValidTeraboxUrl(u));
+    if (invalid.length > 0) {
+      setGlobalError(
+        invalid.length === urls.length
+          ? "None of the URLs look like valid TeraBox links."
+          : `${invalid.length} of ${urls.length} URLs don't look like valid TeraBox links and will be skipped.`
+      );
+    } else {
+      setGlobalError(null);
+    }
+
+    const valid = urls.filter(isValidTeraboxUrl);
+    if (valid.length === 0) {
+      return;
+    }
+
+    setLoading(true);
+    setResults(valid.map((url) => ({ url, status: "loading" })));
+
+    const fetched = await Promise.all(valid.map(fetchOne));
+    setResults(fetched);
+    setLoading(false);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      handleFetch();
+    }
   };
 
   const handleCopy = async (text: string) => {
@@ -88,18 +120,24 @@ export default function Home() {
       setCopiedUrl(text);
       setTimeout(() => setCopiedUrl(null), 2000);
     } catch {
-      // fallback
+      // ignore
     }
   };
 
   const handlePaste = async () => {
     try {
       const text = await navigator.clipboard.readText();
-      setUrl(text);
+      setInput((prev) => (prev ? `${prev}\n${text}` : text));
       inputRef.current?.focus();
     } catch {
       inputRef.current?.focus();
     }
+  };
+
+  const handleClear = () => {
+    setInput("");
+    setGlobalError(null);
+    setResults([]);
   };
 
   const formatBytes = (bytes: number) => {
@@ -117,6 +155,10 @@ export default function Home() {
   const hasStream = (data: FileData) => {
     return !!(data.stream_final_url || data.new_stream_url || data.stream_url);
   };
+
+  const linkCount = parseUrls(input).length;
+  const successCount = results.filter((r) => r.status === "success").length;
+  const errorCount = results.filter((r) => r.status === "error").length;
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
@@ -153,7 +195,7 @@ export default function Home() {
             </span>
           </h1>
           <p className="text-muted-foreground text-lg max-w-md mx-auto leading-relaxed">
-            Paste any TeraBox share link and get instant download and stream access.
+            Paste one or more TeraBox share links and get instant download and stream access.
           </p>
         </div>
 
@@ -163,45 +205,53 @@ export default function Home() {
           style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.4)" }}
         >
           <div className="flex flex-col gap-3">
-            <label className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <Link2 className="w-3.5 h-3.5" />
-              TeraBox Share URL
-            </label>
-            <div className="flex gap-2">
-              <div className="flex-1 relative">
-                <input
-                  ref={inputRef}
-                  type="url"
-                  value={url}
-                  onChange={(e) => {
-                    setUrl(e.target.value);
-                    if (error) setError(null);
-                  }}
-                  onKeyDown={handleKeyDown}
-                  placeholder="https://terabox.com/s/..."
-                  className="w-full bg-muted/50 border border-input rounded-xl px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all duration-200"
-                />
-                {url && (
-                  <button
-                    onClick={() => { setUrl(""); setError(null); setResult(null); }}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors text-xs px-1.5 py-0.5 rounded hover:bg-secondary"
-                  >
-                    Clear
-                  </button>
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                <Link2 className="w-3.5 h-3.5" />
+                TeraBox Share URLs
+                {linkCount > 0 && (
+                  <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-semibold">
+                    {linkCount} {linkCount === 1 ? "link" : "links"}
+                  </span>
                 )}
-              </div>
+              </label>
+              <span className="text-xs text-muted-foreground">One link per line</span>
+            </div>
+            <div className="relative">
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  if (globalError) setGlobalError(null);
+                }}
+                onKeyDown={handleKeyDown}
+                placeholder={"https://terabox.com/s/...\nhttps://terabox.com/s/...\nhttps://1024terabox.com/s/..."}
+                rows={4}
+                className="w-full bg-muted/50 border border-input rounded-xl px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all duration-200 resize-y min-h-[100px] font-mono"
+              />
+            </div>
+            <div className="flex gap-2">
               <button
                 onClick={handlePaste}
-                className="px-4 py-3 rounded-xl border border-input bg-secondary hover:bg-accent text-secondary-foreground text-sm font-medium transition-all duration-200 flex items-center gap-2 shrink-0"
+                className="flex-1 px-4 py-2.5 rounded-xl border border-input bg-secondary hover:bg-accent text-secondary-foreground text-sm font-medium transition-all duration-200 flex items-center justify-center gap-2"
               >
                 <Copy className="w-3.5 h-3.5" />
                 Paste
               </button>
+              {input && (
+                <button
+                  onClick={handleClear}
+                  className="px-4 py-2.5 rounded-xl border border-input bg-secondary hover:bg-accent text-secondary-foreground text-sm font-medium transition-all duration-200"
+                >
+                  Clear
+                </button>
+              )}
             </div>
-            {error && (
+            {globalError && (
               <div className="flex items-center gap-2 text-destructive text-sm bg-destructive/10 border border-destructive/20 rounded-xl px-4 py-3 animate-in fade-in duration-200">
                 <AlertCircle className="w-4 h-4 shrink-0" />
-                {error}
+                {globalError}
               </div>
             )}
             <button
@@ -219,183 +269,65 @@ export default function Home() {
               {loading ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Fetching file info...
+                  Fetching {results.length} {results.length === 1 ? "link" : "links"}...
                 </>
               ) : (
                 <>
                   <Download className="w-4 h-4" />
-                  Get Download Links
+                  {linkCount > 1 ? `Get ${linkCount} Download Links` : "Get Download Links"}
                 </>
               )}
             </button>
+            <p className="text-xs text-muted-foreground text-center">
+              Tip: paste multiple links separated by new lines &middot; Press Ctrl+Enter to fetch
+            </p>
           </div>
         </div>
 
-        {/* Loading Skeleton */}
-        {loading && (
-          <div className="w-full rounded-2xl border border-card-border bg-card p-6 animate-in fade-in duration-300" style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.4)" }}>
-            <div className="flex gap-4">
-              <div className="w-32 h-20 rounded-xl shimmer shrink-0" />
-              <div className="flex-1 flex flex-col gap-3">
-                <div className="h-5 rounded-lg shimmer w-3/4" />
-                <div className="h-4 rounded-lg shimmer w-1/2" />
-                <div className="h-4 rounded-lg shimmer w-1/3" />
-              </div>
-            </div>
-            <div className="mt-6 grid grid-cols-2 gap-3">
-              <div className="h-12 rounded-xl shimmer" />
-              <div className="h-12 rounded-xl shimmer" />
+        {/* Summary bar */}
+        {results.length > 0 && !loading && (
+          <div className="w-full mb-4 flex items-center justify-between text-xs text-muted-foreground px-2 animate-in fade-in duration-300">
+            <span>
+              {results.length} {results.length === 1 ? "result" : "results"}
+            </span>
+            <div className="flex items-center gap-3">
+              {successCount > 0 && (
+                <span className="flex items-center gap-1 text-green-400">
+                  <Check className="w-3 h-3" /> {successCount} ready
+                </span>
+              )}
+              {errorCount > 0 && (
+                <span className="flex items-center gap-1 text-destructive">
+                  <AlertCircle className="w-3 h-3" /> {errorCount} failed
+                </span>
+              )}
             </div>
           </div>
         )}
 
-        {/* Result Card */}
-        {result && !loading && (
-          <div
-            className="w-full rounded-2xl border border-card-border bg-card overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-400"
-            style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.4)" }}
-          >
-            {/* Thumbnail + Meta */}
-            <div className="flex gap-4 p-6 border-b border-border">
-              {result.thumbnail ? (
-                <div className="w-36 h-24 rounded-xl overflow-hidden shrink-0 border border-border bg-muted relative">
-                  <img
-                    src={result.thumbnail}
-                    alt={result.file_name}
-                    className="w-full h-full object-cover"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).style.display = "none";
-                    }}
-                  />
-                  <div className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity bg-black/50">
-                    <FileVideo className="w-8 h-8 text-white" />
-                  </div>
-                </div>
-              ) : (
-                <div className="w-36 h-24 rounded-xl shrink-0 border border-border bg-muted flex items-center justify-center">
-                  <FileVideo className="w-8 h-8 text-muted-foreground" />
-                </div>
-              )}
-              <div className="flex-1 min-w-0">
-                <h2 className="font-semibold text-foreground text-base leading-snug mb-3 truncate" title={result.file_name}>
-                  {result.file_name}
-                </h2>
-                <div className="flex flex-wrap gap-3">
-                  <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                    <HardDrive className="w-3.5 h-3.5 text-primary/70" />
-                    <span>{result.file_size || formatBytes(result.file_size_bytes)}</span>
-                  </div>
-                  {result.duration && result.duration !== "00:00" && (
-                    <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                      <Clock className="w-3.5 h-3.5 text-primary/70" />
-                      <span>{result.duration}</span>
-                    </div>
-                  )}
-                  {result.extension && (
-                    <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                      <FileVideo className="w-3.5 h-3.5 text-primary/70" />
-                      <span className="uppercase">{result.extension.replace(".", "")}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="p-6 flex flex-col gap-3">
-              <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider mb-1">Available Links</p>
-
-              {/* Download Link */}
-              {result.download_url && (
-                <div className="flex gap-2">
-                  <a
-                    href={result.download_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm transition-all duration-200 hover:opacity-90 active:scale-[0.98]"
-                    style={{
-                      background: "linear-gradient(135deg, hsl(217 91% 60%), hsl(217 91% 50%))",
-                      color: "hsl(222 47% 8%)",
-                      boxShadow: "0 4px 16px hsl(217 91% 60% / 0.3)",
-                    }}
-                  >
-                    <Download className="w-4 h-4" />
-                    Download File
-                  </a>
-                  <button
-                    onClick={() => handleCopy(result.download_url)}
-                    className="px-4 py-3 rounded-xl border border-input bg-secondary hover:bg-accent text-secondary-foreground transition-all duration-200 flex items-center gap-1.5 text-sm"
-                    title="Copy download URL"
-                  >
-                    {copiedUrl === result.download_url ? (
-                      <Check className="w-4 h-4 text-green-400" />
-                    ) : (
-                      <Copy className="w-4 h-4" />
-                    )}
-                  </button>
-                </div>
-              )}
-
-              {/* Stream Link */}
-              {hasStream(result) && (
-                <div className="flex gap-2">
-                  <a
-                    href={getStreamUrl(result)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm border border-border bg-secondary hover:bg-accent text-secondary-foreground transition-all duration-200 hover:border-primary/30 active:scale-[0.98]"
-                  >
-                    <Play className="w-4 h-4" />
-                    Stream Online
-                  </a>
-                  <button
-                    onClick={() => handleCopy(getStreamUrl(result))}
-                    className="px-4 py-3 rounded-xl border border-input bg-secondary hover:bg-accent text-secondary-foreground transition-all duration-200 flex items-center gap-1.5 text-sm"
-                    title="Copy stream URL"
-                  >
-                    {copiedUrl === getStreamUrl(result) ? (
-                      <Check className="w-4 h-4 text-green-400" />
-                    ) : (
-                      <Copy className="w-4 h-4" />
-                    )}
-                  </button>
-                </div>
-              )}
-
-              {/* Share URL */}
-              {result.share_url && (
-                <div className="flex gap-2">
-                  <a
-                    href={result.share_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm border border-border bg-muted/50 hover:bg-secondary text-muted-foreground hover:text-foreground transition-all duration-200 active:scale-[0.98]"
-                  >
-                    <Globe className="w-4 h-4" />
-                    Original Share Page
-                  </a>
-                  <button
-                    onClick={() => handleCopy(result.share_url)}
-                    className="px-4 py-3 rounded-xl border border-input bg-secondary hover:bg-accent text-secondary-foreground transition-all duration-200 flex items-center gap-1.5 text-sm"
-                    title="Copy share URL"
-                  >
-                    {copiedUrl === result.share_url ? (
-                      <Check className="w-4 h-4 text-green-400" />
-                    ) : (
-                      <Copy className="w-4 h-4" />
-                    )}
-                  </button>
-                </div>
-              )}
-            </div>
+        {/* Results */}
+        {results.length > 0 && (
+          <div className="w-full flex flex-col gap-4">
+            {results.map((result, idx) => (
+              <ResultCard
+                key={`${result.url}-${idx}`}
+                result={result}
+                index={idx}
+                copiedUrl={copiedUrl}
+                onCopy={handleCopy}
+                formatBytes={formatBytes}
+                getStreamUrl={getStreamUrl}
+                hasStream={hasStream}
+              />
+            ))}
           </div>
         )}
 
         {/* Feature Badges */}
-        {!result && !loading && (
+        {results.length === 0 && !loading && (
           <div className="flex flex-wrap justify-center gap-3 mt-4 animate-in fade-in duration-500 delay-200">
             {[
-              { icon: <Zap className="w-3.5 h-3.5" />, label: "Instant fetch" },
+              { icon: <Zap className="w-3.5 h-3.5" />, label: "Bulk fetch" },
               { icon: <Shield className="w-3.5 h-3.5" />, label: "No login required" },
               { icon: <Globe className="w-3.5 h-3.5" />, label: "Any TeraBox link" },
               { icon: <Play className="w-3.5 h-3.5" />, label: "Stream support" },
@@ -412,14 +344,14 @@ export default function Home() {
         )}
 
         {/* How it works */}
-        {!result && !loading && (
+        {results.length === 0 && !loading && (
           <div className="mt-14 w-full animate-in fade-in duration-500 delay-300">
             <p className="text-center text-xs text-muted-foreground font-medium uppercase tracking-wider mb-6">How it works</p>
             <div className="grid grid-cols-3 gap-4">
               {[
-                { step: "1", title: "Copy link", desc: "Grab a TeraBox share URL from any device" },
-                { step: "2", title: "Paste & fetch", desc: "Paste the URL above and click the button" },
-                { step: "3", title: "Download", desc: "Get direct download or stream links instantly" },
+                { step: "1", title: "Copy links", desc: "Grab one or more TeraBox share URLs" },
+                { step: "2", title: "Paste & fetch", desc: "Paste each on its own line, then click fetch" },
+                { step: "3", title: "Download all", desc: "Get download or stream links for every file" },
               ].map(({ step, title, desc }) => (
                 <div key={step} className="text-center">
                   <div
@@ -458,6 +390,201 @@ export default function Home() {
           Warning এইটা শুধু মাত্র ১৯/২০ দেখার জন্য তৈরি করা হয়েছে।
         </span>
       </footer>
+    </div>
+  );
+}
+
+interface ResultCardProps {
+  result: LinkResult;
+  index: number;
+  copiedUrl: string | null;
+  onCopy: (text: string) => void;
+  formatBytes: (bytes: number) => string;
+  getStreamUrl: (data: FileData) => string;
+  hasStream: (data: FileData) => boolean;
+}
+
+function ResultCard({ result, index, copiedUrl, onCopy, formatBytes, getStreamUrl, hasStream }: ResultCardProps) {
+  // Loading state
+  if (result.status === "loading") {
+    return (
+      <div
+        className="w-full rounded-2xl border border-card-border bg-card p-6 animate-in fade-in duration-300"
+        style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.4)", animationDelay: `${index * 50}ms` }}
+      >
+        <div className="flex gap-4">
+          <div className="w-32 h-20 rounded-xl shimmer shrink-0" />
+          <div className="flex-1 flex flex-col gap-3">
+            <div className="h-5 rounded-lg shimmer w-3/4" />
+            <div className="h-4 rounded-lg shimmer w-1/2" />
+            <div className="h-4 rounded-lg shimmer w-1/3" />
+          </div>
+        </div>
+        <div className="mt-6 grid grid-cols-2 gap-3">
+          <div className="h-12 rounded-xl shimmer" />
+          <div className="h-12 rounded-xl shimmer" />
+        </div>
+      </div>
+    );
+  }
+
+  // Error state
+  if (result.status === "error") {
+    return (
+      <div
+        className="w-full rounded-2xl border border-destructive/30 bg-destructive/5 p-5 animate-in fade-in slide-in-from-bottom-2 duration-300"
+        style={{ animationDelay: `${index * 50}ms` }}
+      >
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-xl bg-destructive/15 border border-destructive/30 flex items-center justify-center shrink-0">
+            <AlertCircle className="w-4 h-4 text-destructive" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-destructive mb-1">Failed to fetch</p>
+            <p className="text-xs text-muted-foreground truncate mb-2" title={result.url}>
+              {result.url}
+            </p>
+            <p className="text-sm text-destructive/90">{result.error}</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Success state
+  const data = result.data!;
+  return (
+    <div
+      className="w-full rounded-2xl border border-card-border bg-card overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-400"
+      style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.4)", animationDelay: `${index * 50}ms` }}
+    >
+      {/* Thumbnail + Meta */}
+      <div className="flex gap-4 p-6 border-b border-border">
+        {data.thumbnail ? (
+          <div className="w-36 h-24 rounded-xl overflow-hidden shrink-0 border border-border bg-muted">
+            <img
+              src={data.thumbnail}
+              alt={data.file_name}
+              className="w-full h-full object-cover"
+              onError={(e) => {
+                (e.target as HTMLImageElement).style.display = "none";
+              }}
+            />
+          </div>
+        ) : (
+          <div className="w-36 h-24 rounded-xl shrink-0 border border-border bg-muted flex items-center justify-center">
+            <FileVideo className="w-8 h-8 text-muted-foreground" />
+          </div>
+        )}
+        <div className="flex-1 min-w-0">
+          <h2 className="font-semibold text-foreground text-base leading-snug mb-3 truncate" title={data.file_name}>
+            {data.file_name}
+          </h2>
+          <div className="flex flex-wrap gap-3">
+            <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              <HardDrive className="w-3.5 h-3.5 text-primary/70" />
+              <span>{data.file_size || formatBytes(data.file_size_bytes)}</span>
+            </div>
+            {data.duration && data.duration !== "00:00" && (
+              <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                <Clock className="w-3.5 h-3.5 text-primary/70" />
+                <span>{data.duration}</span>
+              </div>
+            )}
+            {data.extension && (
+              <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                <FileVideo className="w-3.5 h-3.5 text-primary/70" />
+                <span className="uppercase">{data.extension.replace(".", "")}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Action Buttons */}
+      <div className="p-6 flex flex-col gap-3">
+        <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider mb-1">Available Links</p>
+
+        {data.download_url && (
+          <div className="flex gap-2">
+            <a
+              href={data.download_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm transition-all duration-200 hover:opacity-90 active:scale-[0.98]"
+              style={{
+                background: "linear-gradient(135deg, hsl(217 91% 60%), hsl(217 91% 50%))",
+                color: "hsl(222 47% 8%)",
+                boxShadow: "0 4px 16px hsl(217 91% 60% / 0.3)",
+              }}
+            >
+              <Download className="w-4 h-4" />
+              Download File
+            </a>
+            <button
+              onClick={() => onCopy(data.download_url)}
+              className="px-4 py-3 rounded-xl border border-input bg-secondary hover:bg-accent text-secondary-foreground transition-all duration-200 flex items-center gap-1.5 text-sm"
+              title="Copy download URL"
+            >
+              {copiedUrl === data.download_url ? (
+                <Check className="w-4 h-4 text-green-400" />
+              ) : (
+                <Copy className="w-4 h-4" />
+              )}
+            </button>
+          </div>
+        )}
+
+        {hasStream(data) && (
+          <div className="flex gap-2">
+            <a
+              href={getStreamUrl(data)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm border border-border bg-secondary hover:bg-accent text-secondary-foreground transition-all duration-200 hover:border-primary/30 active:scale-[0.98]"
+            >
+              <Play className="w-4 h-4" />
+              Stream Online
+            </a>
+            <button
+              onClick={() => onCopy(getStreamUrl(data))}
+              className="px-4 py-3 rounded-xl border border-input bg-secondary hover:bg-accent text-secondary-foreground transition-all duration-200 flex items-center gap-1.5 text-sm"
+              title="Copy stream URL"
+            >
+              {copiedUrl === getStreamUrl(data) ? (
+                <Check className="w-4 h-4 text-green-400" />
+              ) : (
+                <Copy className="w-4 h-4" />
+              )}
+            </button>
+          </div>
+        )}
+
+        {data.share_url && (
+          <div className="flex gap-2">
+            <a
+              href={data.share_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm border border-border bg-muted/50 hover:bg-secondary text-muted-foreground hover:text-foreground transition-all duration-200 active:scale-[0.98]"
+            >
+              <Globe className="w-4 h-4" />
+              Original Share Page
+            </a>
+            <button
+              onClick={() => onCopy(data.share_url)}
+              className="px-4 py-3 rounded-xl border border-input bg-secondary hover:bg-accent text-secondary-foreground transition-all duration-200 flex items-center gap-1.5 text-sm"
+              title="Copy share URL"
+            >
+              {copiedUrl === data.share_url ? (
+                <Check className="w-4 h-4 text-green-400" />
+              ) : (
+                <Copy className="w-4 h-4" />
+              )}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
