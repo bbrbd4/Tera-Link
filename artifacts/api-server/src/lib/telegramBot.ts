@@ -32,6 +32,36 @@ interface TgUpdate {
     from?: { id: number; first_name?: string; username?: string; is_bot?: boolean };
     text?: string;
   };
+  callback_query?: {
+    id: string;
+    from: { id: number; first_name?: string; username?: string; is_bot?: boolean };
+    message?: { message_id: number; chat: { id: number } };
+    data?: string;
+  };
+}
+
+// Telegram Bot API limits for sending uploaded files
+const TG_UPLOAD_VIDEO_LIMIT = 50 * 1024 * 1024; // 50 MB
+const TG_URL_VIDEO_LIMIT = 20 * 1024 * 1024; // 20 MB
+const DOWNLOAD_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
+interface PendingDownload {
+  url: string;
+  fileName: string;
+  sizeBytes: number;
+  duration?: string;
+  isVideo: boolean;
+  chatId: number;
+  createdAt: number;
+}
+const pendingDownloads = new Map<string, PendingDownload>();
+function makeDlToken(): string {
+  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+}
+function reapPendingDownloads(): void {
+  const cutoff = Date.now() - DOWNLOAD_TOKEN_TTL_MS;
+  for (const [k, v] of pendingDownloads) {
+    if (v.createdAt < cutoff) pendingDownloads.delete(k);
+  }
 }
 
 interface TgResponse<T> {
@@ -164,7 +194,7 @@ async function pollLoop(state: BotState): Promise<void> {
       const updates = await tgCall<TgUpdate[]>(state.token, "getUpdates", {
         offset: state.offset,
         timeout: 25,
-        allowed_updates: ["message"],
+        allowed_updates: ["message", "callback_query"],
       });
       if (!updates.ok) {
         if (updates.error_code === 401) {
@@ -353,6 +383,10 @@ function buildMeText(user: BotUser): string {
 }
 
 async function handleUpdate(state: BotState, update: TgUpdate): Promise<void> {
+  if (update.callback_query) {
+    await handleCallbackQuery(state, update.callback_query);
+    return;
+  }
   const msg = update.message;
   if (!msg || !msg.text || !msg.from || msg.from.is_bot) return;
   const chatId = msg.chat.id;
@@ -615,16 +649,15 @@ async function sendFileResult(
     /\.(mp4|mkv|mov|webm|m4v|avi)$/i.test(file.file_name) ||
     (file.extension && /^(mp4|mkv|mov|webm|m4v|avi)$/i.test(file.extension));
 
-  const TG_URL_VIDEO_LIMIT = 20 * 1024 * 1024;
   const sizeBytes = Number(file.file_size_bytes) || 0;
   const canSendDirectly =
     isVideo && !!file.download_url && sizeBytes > 0 && sizeBytes <= TG_URL_VIDEO_LIMIT;
 
   const baseCaption =
-    `📁 *${escapeMdV2(file.file_name)}*\n` +
-    `📦 Size: ${escapeMdV2(file.file_size || "")}` +
+    `📁 <b>${escapeHtml(file.file_name)}</b>\n` +
+    `📦 Size: ${escapeHtml(file.file_size || "")}` +
     (file.duration && file.duration !== "00:00"
-      ? `\n⏱ Duration: ${escapeMdV2(file.duration)}`
+      ? `\n⏱ Duration: ${escapeHtml(file.duration)}`
       : "");
 
   if (canSendDirectly) {
@@ -632,31 +665,51 @@ async function sendFileResult(
       chat_id: chatId,
       video: file.download_url,
       caption: baseCaption,
-      parse_mode: "MarkdownV2",
+      parse_mode: "HTML",
       supports_streaming: true,
     });
     if (video.ok) return;
   }
 
-  const inlineKeyboard: { text: string; url: string }[][] = [];
-  if (file.download_url) inlineKeyboard.push([{ text: "⬇️ Download", url: file.download_url }]);
+  // For larger files: show Download button as a callback. When pressed, the
+  // bot fetches the file server-side and uploads it directly to Telegram —
+  // no download URL is ever exposed to the user.
+  reapPendingDownloads();
+  const inlineKeyboard: { text: string; url?: string; callback_data?: string }[][] = [];
+  if (file.download_url) {
+    const tooLarge = sizeBytes > 0 && sizeBytes > TG_UPLOAD_VIDEO_LIMIT;
+    if (tooLarge) {
+      inlineKeyboard.push([{ text: "⚠️ File too large for Telegram (max 50MB)", callback_data: "noop" }]);
+    } else {
+      const tok = makeDlToken();
+      pendingDownloads.set(tok, {
+        url: file.download_url,
+        fileName: file.file_name,
+        sizeBytes,
+        duration: file.duration,
+        isVideo: !!isVideo,
+        chatId,
+        createdAt: Date.now(),
+      });
+      inlineKeyboard.push([{ text: "⬇️ Download", callback_data: `dl:${tok}` }]);
+    }
+  }
   if (streamUrl) inlineKeyboard.push([{ text: "▶️ Stream Online", url: streamUrl }]);
-  if (file.share_url) inlineKeyboard.push([{ text: "🔗 Share Page", url: file.share_url }]);
   const replyMarkup =
     inlineKeyboard.length > 0 ? { inline_keyboard: inlineKeyboard } : undefined;
 
-  const tooLargeNote =
-    isVideo && sizeBytes > TG_URL_VIDEO_LIMIT
-      ? `\n\n_File is larger than 20MB \\- use the buttons below\\._`
+  const sizeNote =
+    isVideo && sizeBytes > TG_URL_VIDEO_LIMIT && sizeBytes <= TG_UPLOAD_VIDEO_LIMIT
+      ? `\n\n<i>Tap Download — I'll upload it here directly.</i>`
       : "";
-  const caption = baseCaption + tooLargeNote;
+  const caption = baseCaption + sizeNote;
 
   if (file.thumbnail) {
     const photo = await tgCall(token, "sendPhoto", {
       chat_id: chatId,
       photo: file.thumbnail,
       caption,
-      parse_mode: "MarkdownV2",
+      parse_mode: "HTML",
       reply_markup: replyMarkup,
     });
     if (photo.ok) return;
@@ -665,8 +718,140 @@ async function sendFileResult(
   await tgCall(token, "sendMessage", {
     chat_id: chatId,
     text: caption,
-    parse_mode: "MarkdownV2",
+    parse_mode: "HTML",
     disable_web_page_preview: true,
     reply_markup: replyMarkup,
   });
+}
+
+async function tgUploadMultipart(
+  token: string,
+  method: "sendVideo" | "sendDocument",
+  fields: Record<string, string>,
+  fileField: string,
+  fileName: string,
+  fileBlob: Blob,
+): Promise<TgResponse<unknown>> {
+  const form = new FormData();
+  for (const [k, v] of Object.entries(fields)) form.append(k, v);
+  form.append(fileField, fileBlob, fileName);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+      method: "POST",
+      body: form,
+      signal: controller.signal,
+    });
+    return (await res.json()) as TgResponse<unknown>;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function handleCallbackQuery(
+  state: BotState,
+  cq: NonNullable<TgUpdate["callback_query"]>,
+): Promise<void> {
+  const data = cq.data || "";
+  const chatId = cq.message?.chat.id;
+  const ackOnly = async (text?: string) =>
+    tgCall(state.token, "answerCallbackQuery", {
+      callback_query_id: cq.id,
+      text,
+      show_alert: false,
+    }).catch(() => {});
+
+  if (data === "noop" || !chatId) {
+    await ackOnly();
+    return;
+  }
+  if (!data.startsWith("dl:")) {
+    await ackOnly();
+    return;
+  }
+  const tok = data.slice(3);
+  const pd = pendingDownloads.get(tok);
+  if (!pd) {
+    await ackOnly("Link expired. Please send the TeraBox link again.");
+    return;
+  }
+  pendingDownloads.delete(tok);
+  await ackOnly("⏳ Downloading… please wait");
+
+  const status = await tgCall<{ message_id: number }>(state.token, "sendMessage", {
+    chat_id: chatId,
+    text: `⏳ Downloading <b>${escapeHtml(pd.fileName)}</b>…`,
+    parse_mode: "HTML",
+  });
+  const statusMsgId = status.ok && status.result ? status.result.message_id : null;
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4 * 60 * 1000);
+    let buf: Buffer;
+    try {
+      const res = await fetch(pd.url, {
+        signal: controller.signal,
+        headers: { "User-Agent": "Mozilla/5.0" },
+      });
+      if (!res.ok) throw new Error(`upstream ${res.status}`);
+      const contentLen = Number(res.headers.get("content-length") || "0");
+      if (contentLen > TG_UPLOAD_VIDEO_LIMIT) {
+        throw new Error("File too large for Telegram (50MB limit).");
+      }
+      const ab = await res.arrayBuffer();
+      if (ab.byteLength > TG_UPLOAD_VIDEO_LIMIT) {
+        throw new Error("File too large for Telegram (50MB limit).");
+      }
+      buf = Buffer.from(ab);
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const caption =
+      `📁 <b>${escapeHtml(pd.fileName)}</b>\n📦 Size: ${escapeHtml(formatBytes(buf.length))}` +
+      (pd.duration && pd.duration !== "00:00" ? `\n⏱ Duration: ${escapeHtml(pd.duration)}` : "");
+    const blob = new Blob([new Uint8Array(buf)]);
+    const method = pd.isVideo ? "sendVideo" : "sendDocument";
+    const fileField = pd.isVideo ? "video" : "document";
+    const fields: Record<string, string> = {
+      chat_id: String(chatId),
+      caption,
+      parse_mode: "HTML",
+    };
+    if (pd.isVideo) fields.supports_streaming = "true";
+    const result = await tgUploadMultipart(state.token, method, fields, fileField, pd.fileName, blob);
+    if (!result.ok) throw new Error(result.description || "upload failed");
+    if (statusMsgId) {
+      tgCall(state.token, "deleteMessage", {
+        chat_id: chatId,
+        message_id: statusMsgId,
+      }).catch(() => {});
+    }
+  } catch (err) {
+    logger.error({ err, file: pd.fileName }, "callback download failed");
+    const errText = err instanceof Error ? err.message : "unknown error";
+    if (statusMsgId) {
+      tgCall(state.token, "editMessageText", {
+        chat_id: chatId,
+        message_id: statusMsgId,
+        text: `❌ Could not upload <b>${escapeHtml(pd.fileName)}</b>: ${escapeHtml(errText)}`,
+        parse_mode: "HTML",
+      }).catch(() => {});
+    } else {
+      tgCall(state.token, "sendMessage", {
+        chat_id: chatId,
+        text: `❌ Could not upload <b>${escapeHtml(pd.fileName)}</b>: ${escapeHtml(errText)}`,
+        parse_mode: "HTML",
+      }).catch(() => {});
+    }
+  }
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
