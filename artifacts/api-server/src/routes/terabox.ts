@@ -15,7 +15,9 @@ router.get("/terabox", async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "Failed to fetch from upstream TeraBox API");
     const msg = err instanceof Error ? err.message : "Failed to reach the upstream API.";
-    res.status(502).json({ success: false, error: msg });
+    const code = (err as { code?: string }).code;
+    const status = code === "LINK_INVALID" ? 404 : 502;
+    res.status(status).json({ success: false, error: msg });
   }
 });
 

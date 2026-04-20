@@ -163,10 +163,11 @@ export default function Home() {
     try {
       const apiUrl = `/api/terabox?url=${encodeURIComponent(url)}`;
       const res = await fetch(apiUrl, { signal: controller.signal });
+      const json: ApiResponse = await res.json().catch(() => ({ success: false } as ApiResponse));
       if (!res.ok) {
-        throw new Error(`Server responded with status ${res.status}`);
+        const serverMsg = (json as { error?: string }).error;
+        throw new Error(serverMsg || `Server responded with status ${res.status}`);
       }
-      const json: ApiResponse = await res.json();
       if (!json.success || !json.data || json.data.length === 0) {
         throw new Error("Could not fetch file data. The link may be invalid or expired.");
       }

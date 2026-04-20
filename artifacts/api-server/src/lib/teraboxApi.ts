@@ -31,7 +31,11 @@ export async function fetchTeraboxInfo(url: string): Promise<TeraboxApiResponse>
   }
   const data = (await response.json()) as TeraboxApiResponse;
   if (!data.success || !data.data || data.data.length === 0) {
-    throw new Error("Could not fetch file data. The link may be invalid or expired.");
+    const err: Error & { code?: string } = new Error(
+      "This link is invalid, expired, private, or the file was deleted. Please check the link on TeraBox and try again."
+    );
+    err.code = "LINK_INVALID";
+    throw err;
   }
   return data;
 }
