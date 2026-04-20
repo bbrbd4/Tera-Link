@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Download, Play, FileVideo, HardDrive, Clock, Link2, AlertCircle, Loader2, Copy, Check, Zap, Shield, Globe, Bot, Power, ExternalLink, Eye, EyeOff, FolderOpen, Folder, ChevronDown, ChevronUp, ChevronRight, File as FileIcon } from "lucide-react";
+import { Download, Play, FileVideo, HardDrive, Clock, Link2, AlertCircle, Loader2, Copy, Check, Zap, Shield, Globe, Bot, ExternalLink, FolderOpen, Folder, ChevronDown, ChevronUp, ChevronRight, File as FileIcon } from "lucide-react";
 
 interface FileData {
   file_name: string;
@@ -61,7 +61,6 @@ interface BotInfo {
   startedAt: number;
   processed: number;
   errors: number;
-  tokenMask: string;
 }
 
 export default function Home() {
@@ -72,99 +71,26 @@ export default function Home() {
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Bot state
-  const [showBotSection, setShowBotSection] = useState(false);
-  const [botToken, setBotToken] = useState("");
-  const [showToken, setShowToken] = useState(false);
-  const [botLoading, setBotLoading] = useState(false);
-  const [botError, setBotError] = useState<string | null>(null);
+  // Owner-bot status (read-only)
   const [botInfo, setBotInfo] = useState<BotInfo | null>(null);
 
-  // Restore token + status on mount
   useEffect(() => {
-    const saved = localStorage.getItem("tb_bot_token");
-    if (saved) {
-      setBotToken(saved);
-      checkBotStatus(saved);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let cancelled = false;
+    const fetchStatus = async () => {
+      try {
+        const res = await fetch("/api/bot/status");
+        const json = await res.json();
+        if (cancelled) return;
+        setBotInfo(json.success && json.running && json.bot ? json.bot : null);
+      } catch {
+        // ignore
+      }
+    };
+    fetchStatus();
+    return () => {
+      cancelled = true;
+    };
   }, []);
-
-  // Poll bot status every 8 seconds while connected
-  useEffect(() => {
-    if (!botInfo || !botToken) return;
-    const id = setInterval(() => checkBotStatus(botToken), 8000);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [botInfo?.username, botToken]);
-
-  const checkBotStatus = async (token: string) => {
-    try {
-      const res = await fetch("/api/bot/status", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
-      });
-      const json = await res.json();
-      if (json.success && json.running && json.bot) {
-        setBotInfo(json.bot);
-      } else {
-        setBotInfo(null);
-      }
-    } catch {
-      // ignore
-    }
-  };
-
-  const handleBotStart = async () => {
-    const token = botToken.trim();
-    if (!token) {
-      setBotError("Please paste your Telegram bot token.");
-      return;
-    }
-    setBotLoading(true);
-    setBotError(null);
-    try {
-      const res = await fetch("/api/bot/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
-      });
-      const json = await res.json();
-      if (!json.success) {
-        throw new Error(json.error || "Failed to start bot");
-      }
-      setBotInfo(json.bot);
-      localStorage.setItem("tb_bot_token", token);
-    } catch (err) {
-      setBotError(err instanceof Error ? err.message : "Failed to start bot");
-    } finally {
-      setBotLoading(false);
-    }
-  };
-
-  const handleBotStop = async () => {
-    if (!botToken) return;
-    setBotLoading(true);
-    setBotError(null);
-    try {
-      const res = await fetch("/api/bot/stop", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: botToken.trim() }),
-      });
-      const json = await res.json().catch(() => ({ success: false }));
-      if (!res.ok || !json.success) {
-        throw new Error(json.error || "Failed to disconnect the bot.");
-      }
-      setBotInfo(null);
-      localStorage.removeItem("tb_bot_token");
-    } catch (err) {
-      setBotError(err instanceof Error ? err.message : "Failed to disconnect the bot.");
-    } finally {
-      setBotLoading(false);
-    }
-  };
 
   const isValidTeraboxUrl = (u: string) => {
     try {
@@ -443,11 +369,13 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Telegram Bot Section */}
-        <div className="w-full mb-6">
-          {!showBotSection && !botInfo && (
-            <button
-              onClick={() => setShowBotSection(true)}
+        {/* Telegram Bot Banner */}
+        {botInfo && (
+          <div className="w-full mb-6">
+            <a
+              href={`https://t.me/${botInfo.username}`}
+              target="_blank"
+              rel="noopener noreferrer"
               className="w-full flex items-center justify-between gap-3 px-5 py-4 rounded-2xl border border-card-border bg-card hover:bg-secondary/50 transition-all duration-200 group"
               style={{ boxShadow: "0 4px 16px rgba(0,0,0,0.2)" }}
             >
@@ -462,21 +390,27 @@ export default function Home() {
                   <Bot className="w-5 h-5 text-white" />
                 </div>
                 <div className="text-left">
-                  <p className="font-semibold text-sm text-foreground">Connect a Telegram Bot</p>
-                  <p className="text-xs text-muted-foreground">Use your own bot to download from Telegram</p>
+                  <p className="font-semibold text-sm text-foreground flex items-center gap-2">
+                    Try our Telegram Bot
+                    <span className="inline-flex items-center gap-1 text-xs bg-green-500/15 text-green-400 border border-green-500/25 rounded-full px-2 py-0.5 font-medium">
+                      <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                      Live
+                    </span>
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    @{botInfo.username} &middot; Send any TeraBox link in chat
+                  </p>
                 </div>
               </div>
-              <span className="text-xs text-primary font-medium opacity-70 group-hover:opacity-100 transition-opacity">
-                Set up &rarr;
+              <span className="text-xs text-primary font-medium opacity-70 group-hover:opacity-100 transition-opacity flex items-center gap-1">
+                Open <ExternalLink className="w-3 h-3" />
               </span>
-            </button>
-          )}
+            </a>
+          </div>
+        )}
 
-          {(showBotSection || botInfo) && (
-            <div
-              className="w-full rounded-2xl border border-card-border bg-card p-6 animate-in fade-in slide-in-from-bottom-2 duration-300"
-              style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.4)" }}
-            >
+        {false && (
+            <div>
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-3">
                   <div
