@@ -41,3 +41,8 @@ externalPort = 3001
 
 [nix]
 channel = "stable-25_05"
+
+[userenv]
+
+[userenv.shared]
+TERABOX_NDUS_COOKIE = "Y2mpXXPpeHuisy9pP1jX68zON1y3rdZZqi_Q7DRS"

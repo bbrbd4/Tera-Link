@@ -1259,7 +1259,7 @@ function FolderTreeCard({ tree, url, index, copiedUrl, onCopy }: FolderTreeCardP
             )}
           </div>
           <div className="p-3 border-t border-card-border bg-secondary/10 text-xs text-muted-foreground text-center">
-            Click any file to open it on TeraBox in a new tab.
+            Click Watch to stream a file in-app, or Download to save it directly.
           </div>
         </div>
       )}
@@ -1274,8 +1274,66 @@ interface TreeRowProps {
   onCopy: (text: string) => void;
 }
 
+type DlinkState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; dlink: string; filename?: string }
+  | { status: "error"; message: string };
+
 function TreeRow({ node, depth, copiedUrl, onCopy }: TreeRowProps) {
   const [open, setOpen] = useState(depth < 1);
+  const [dlinkState, setDlinkState] = useState<DlinkState>({ status: "idle" });
+  const [showPlayer, setShowPlayer] = useState(false);
+
+  const fetchDlink = async (): Promise<{ dlink: string; filename?: string } | null> => {
+    if (dlinkState.status === "ready") return dlinkState;
+    if (dlinkState.status === "loading") return null;
+    setDlinkState({ status: "loading" });
+    try {
+      const parentDir = node.path.includes("/")
+        ? node.path.substring(0, node.path.lastIndexOf("/")) || "/"
+        : "/";
+      const params = new URLSearchParams({
+        surl: node.shorturl || "",
+        dir: parentDir,
+        fsId: String(node.fsId || ""),
+      });
+      const res = await fetch(`/api/terabox/dlink?${params.toString()}`);
+      const data = (await res.json()) as {
+        success: boolean;
+        dlink?: string;
+        filename?: string;
+        error?: string;
+      };
+      if (!data.success || !data.dlink) {
+        setDlinkState({ status: "error", message: data.error || "Failed to get link" });
+        return null;
+      }
+      setDlinkState({ status: "ready", dlink: data.dlink, filename: data.filename });
+      return { dlink: data.dlink, filename: data.filename };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Network error";
+      setDlinkState({ status: "error", message: msg });
+      return null;
+    }
+  };
+
+  const handleWatch = async () => {
+    setShowPlayer(true);
+    if (dlinkState.status !== "ready") await fetchDlink();
+  };
+
+  const handleDownload = async () => {
+    const r = await fetchDlink();
+    if (!r) return;
+    const a = document.createElement("a");
+    a.href = r.dlink;
+    a.download = r.filename || node.name;
+    a.rel = "noopener noreferrer";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
 
   if (node.isDir) {
     const childCount = (node.children || []).length;
@@ -1314,14 +1372,9 @@ function TreeRow({ node, depth, copiedUrl, onCopy }: TreeRowProps) {
 
   // File row
   const isVideo = (node.category === 1) || /\.(mp4|mkv|webm|mov|avi|flv|wmv|m4v)$/i.test(node.name);
-  // Best deep-link to the specific file inside the share — opens TeraBox web player / download UI
-  const teraboxFileUrl = `https://www.terabox.com/sharing/link?surl=${node.shorturl}&path=${encodeURIComponent(
-    node.path
-  )}`;
-  // Try our own re-fetch for this specific file path via a synthesized URL
-  const refetchUrl = `https://1024terabox.com/s/1${node.shorturl}?path=${encodeURIComponent(node.path)}`;
 
   return (
+    <>
     <div
       className="flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-accent/30 transition-colors group"
       style={{ paddingLeft: `${depth * 16 + 8}px` }}
@@ -1354,38 +1407,108 @@ function TreeRow({ node, depth, copiedUrl, onCopy }: TreeRowProps) {
         <p className="text-xs text-muted-foreground">{node.sizeText}</p>
       </div>
       {isVideo && (
-        <a
-          href={teraboxFileUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-semibold bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 border border-purple-500/40 transition-all flex-shrink-0"
-          title="Watch this video on TeraBox"
+        <button
+          onClick={handleWatch}
+          disabled={dlinkState.status === "loading"}
+          className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-semibold bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 border border-purple-500/40 transition-all flex-shrink-0 disabled:opacity-60"
+          title="Watch this video here"
         >
           <Play className="w-3 h-3" />
           Watch
-        </a>
+        </button>
       )}
-      <a
-        href={teraboxFileUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-semibold bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 transition-all flex-shrink-0"
-        title="Download from TeraBox"
-      >
-        <Download className="w-3 h-3" />
-        Download
-      </a>
       <button
-        onClick={() => onCopy(refetchUrl)}
-        className="flex items-center gap-1 px-2 py-1.5 rounded-md text-xs border border-input bg-secondary hover:bg-accent text-secondary-foreground transition-all flex-shrink-0"
-        title="Copy file link"
+        onClick={handleDownload}
+        disabled={dlinkState.status === "loading"}
+        className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-semibold bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 transition-all flex-shrink-0 disabled:opacity-60"
+        title="Download file"
       >
-        {copiedUrl === refetchUrl ? (
+        {dlinkState.status === "loading" ? (
+          <Loader2 className="w-3 h-3 animate-spin" />
+        ) : (
+          <Download className="w-3 h-3" />
+        )}
+        Download
+      </button>
+      <button
+        onClick={async () => {
+          const r = await fetchDlink();
+          if (r) onCopy(r.dlink);
+        }}
+        className="flex items-center gap-1 px-2 py-1.5 rounded-md text-xs border border-input bg-secondary hover:bg-accent text-secondary-foreground transition-all flex-shrink-0"
+        title="Copy direct link"
+      >
+        {dlinkState.status === "ready" && copiedUrl === dlinkState.dlink ? (
           <Check className="w-3 h-3 text-green-400" />
         ) : (
           <Copy className="w-3 h-3" />
         )}
       </button>
+
     </div>
+      {dlinkState.status === "error" && !showPlayer && (
+        <div
+          className="text-xs text-red-400 px-2 pb-2 -mt-1"
+          style={{ paddingLeft: `${depth * 16 + 60}px` }}
+        >
+          {dlinkState.message}
+        </div>
+      )}
+      {showPlayer && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setShowPlayer(false)}
+        >
+          <div
+            className="relative w-full max-w-4xl bg-card border border-card-border rounded-xl overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-card-border">
+              <p className="text-sm font-semibold text-foreground truncate pr-4">{node.name}</p>
+              <button
+                onClick={() => setShowPlayer(false)}
+                className="text-muted-foreground hover:text-foreground text-xl leading-none px-2"
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <div className="bg-black flex items-center justify-center" style={{ minHeight: "60vh" }}>
+              {dlinkState.status === "loading" && (
+                <div className="flex items-center gap-2 text-muted-foreground py-12">
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <span className="text-sm">Preparing stream...</span>
+                </div>
+              )}
+              {dlinkState.status === "error" && (
+                <p className="text-sm text-red-400 py-12 px-4 text-center">{dlinkState.message}</p>
+              )}
+              {dlinkState.status === "ready" && (
+                <video
+                  src={dlinkState.dlink}
+                  controls
+                  autoPlay
+                  className="w-full max-h-[80vh]"
+                  crossOrigin="anonymous"
+                >
+                  Your browser does not support video playback.
+                </video>
+              )}
+            </div>
+            {dlinkState.status === "ready" && (
+              <div className="px-4 py-3 border-t border-card-border flex items-center justify-end gap-2">
+                <button
+                  onClick={handleDownload}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Download
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </>
   );
 }
