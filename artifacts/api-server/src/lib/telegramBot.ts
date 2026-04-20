@@ -311,6 +311,13 @@ function buildWelcome(firstName: string, botUsername: string): string {
   );
 }
 
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 function buildReferText(user: BotUser, botUsername: string): string {
   const link = `https://t.me/${botUsername}?start=${user.referralCode}`;
   const premium = isPremium(user);
@@ -320,12 +327,12 @@ function buildReferText(user: BotUser, botUsername: string): string {
     ? user.premiumUntil.toISOString().slice(0, 10)
     : null;
   return (
-    `🎁 *Refer & Get Premium*\n\n` +
-    `Share your link\\. Every *${REFERRALS_FOR_PREMIUM}* friends who join with it = *${PREMIUM_DAYS_PER_REWARD} days* of Premium\\.\n\n` +
-    `🔗 Your link:\n\`${escapeMdV2Code(link)}\`\n\n` +
-    `👥 Total referrals: *${user.referralCount}*\n` +
-    `⏭ Next reward in: *${remaining}* more friend${remaining === 1 ? "" : "s"}\n` +
-    `${premium ? `💎 Premium active until *${escapeMdV2(expiry || "")}*` : `🆓 Status: Free user`}`
+    `🎁 <b>Refer &amp; Get Premium</b>\n\n` +
+    `Share your link. Every <b>${REFERRALS_FOR_PREMIUM}</b> friends who join with it = <b>${PREMIUM_DAYS_PER_REWARD} days</b> of Premium.\n\n` +
+    `🔗 Your link:\n<code>${escapeHtml(link)}</code>\n\n` +
+    `👥 Total referrals: <b>${user.referralCount}</b>\n` +
+    `⏭ Next reward in: <b>${remaining}</b> more friend${remaining === 1 ? "" : "s"}\n` +
+    `${premium ? `💎 Premium active until <b>${escapeHtml(expiry || "")}</b>` : `🆓 Status: Free user`}`
   );
 }
 
@@ -335,13 +342,13 @@ function buildMeText(user: BotUser): string {
     ? user.premiumUntil.toISOString().slice(0, 10)
     : null;
   return (
-    `👤 *Your Account*\n\n` +
-    `🆔 ID: \`${escapeMdV2Code(String(user.telegramId))}\`\n` +
-    `👥 Referrals: *${user.referralCount}*\n` +
-    `${premium ? `💎 *Premium* until ${escapeMdV2(expiry || "")}` : `🆓 Free user`}\n\n` +
+    `👤 <b>Your Account</b>\n\n` +
+    `🆔 ID: <code>${user.telegramId}</code>\n` +
+    `👥 Referrals: <b>${user.referralCount}</b>\n` +
+    `${premium ? `💎 <b>Premium</b> until ${escapeHtml(expiry || "")}` : `🆓 Free user`}\n\n` +
     (premium
-      ? `✨ You can send up to *${PREMIUM_LINK_LIMIT}* links per message and open full folders\\.`
-      : `Free users: *${FREE_LINK_LIMIT}* link per message, *${FREE_FOLDER_FILE_LIMIT}* file from a folder\\. Use /refer to upgrade\\.`)
+      ? `✨ You can send up to <b>${PREMIUM_LINK_LIMIT}</b> links per message and open full folders.`
+      : `Free users: <b>${FREE_LINK_LIMIT}</b> link per message, <b>${FREE_FOLDER_FILE_LIMIT}</b> file from a folder. Use /refer to upgrade.`)
   );
 }
 
@@ -386,21 +393,23 @@ async function handleUpdate(state: BotState, update: TgUpdate): Promise<void> {
   }
 
   if (text.startsWith("/refer")) {
-    await tgCall(state.token, "sendMessage", {
+    const r = await tgCall(state.token, "sendMessage", {
       chat_id: chatId,
       text: buildReferText(user, state.username),
-      parse_mode: "MarkdownV2",
+      parse_mode: "HTML",
       disable_web_page_preview: true,
     });
+    if (!r.ok) logger.error({ desc: r.description }, "refer send failed");
     return;
   }
 
   if (text.startsWith("/me")) {
-    await tgCall(state.token, "sendMessage", {
+    const r = await tgCall(state.token, "sendMessage", {
       chat_id: chatId,
       text: buildMeText(user),
-      parse_mode: "MarkdownV2",
+      parse_mode: "HTML",
     });
+    if (!r.ok) logger.error({ desc: r.description }, "me send failed");
     return;
   }
 
