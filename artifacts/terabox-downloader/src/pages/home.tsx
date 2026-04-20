@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Download, Play, FileVideo, HardDrive, Clock, Link2, AlertCircle, Loader2, Copy, Check, Zap, Shield, Globe, Bot, Power, ExternalLink, Eye, EyeOff, FolderOpen, ChevronDown, ChevronUp } from "lucide-react";
+import { Download, Play, FileVideo, HardDrive, Clock, Link2, AlertCircle, Loader2, Copy, Check, Zap, Shield, Globe, Bot, Power, ExternalLink, Eye, EyeOff, FolderOpen, Folder, ChevronDown, ChevronUp, ChevronRight, File as FileIcon } from "lucide-react";
 
 interface FileData {
   file_name: string;
@@ -18,14 +18,40 @@ interface FileData {
 
 interface ApiResponse {
   success: boolean;
-  data: FileData[];
+  data?: FileData[];
   channel?: string;
+  kind?: "folder-tree";
+  tree?: TeraboxTree;
+  error?: string;
+}
+
+interface TreeNode {
+  name: string;
+  path: string;
+  isDir: boolean;
+  size: number;
+  sizeText: string;
+  fsId?: string;
+  category?: number;
+  thumbnail?: string;
+  shorturl: string;
+  shareUrl: string;
+  children?: TreeNode[];
+}
+
+interface TeraboxTree {
+  root: TreeNode;
+  totalFiles: number;
+  totalFolders: number;
+  totalSize: number;
+  totalSizeText: string;
 }
 
 interface LinkResult {
   url: string;
   status: "loading" | "success" | "error";
   files?: FileData[];
+  tree?: TeraboxTree;
   error?: string;
 }
 
@@ -167,6 +193,9 @@ export default function Home() {
       if (!res.ok) {
         const serverMsg = (json as { error?: string }).error;
         throw new Error(serverMsg || `Server responded with status ${res.status}`);
+      }
+      if (json.kind === "folder-tree" && json.tree) {
+        return { url, status: "success", tree: json.tree };
       }
       if (!json.success || !json.data || json.data.length === 0) {
         throw new Error("Could not fetch file data. The link may be invalid or expired.");
@@ -799,7 +828,19 @@ function ResultCard({ result, index, copiedUrl, onCopy, formatBytes, getStreamUr
     );
   }
 
-  // Success state
+  // Success state — folder-tree variant (nested subfolders from official TeraBox API)
+  if (result.tree) {
+    return (
+      <FolderTreeCard
+        tree={result.tree}
+        url={result.url}
+        index={index}
+        copiedUrl={copiedUrl}
+        onCopy={onCopy}
+      />
+    );
+  }
+
   if (!result.files || result.files.length === 0) {
     return null;
   }
@@ -1134,6 +1175,201 @@ function FolderFileRow({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+interface FolderTreeCardProps {
+  tree: TeraboxTree;
+  url: string;
+  index: number;
+  copiedUrl: string | null;
+  onCopy: (text: string) => void;
+}
+
+function FolderTreeCard({ tree, url, index, copiedUrl, onCopy }: FolderTreeCardProps) {
+  const [expanded, setExpanded] = useState(true);
+  const [search, setSearch] = useState("");
+
+  const filterNode = (node: TreeNode, q: string): TreeNode | null => {
+    if (!q) return node;
+    const ql = q.toLowerCase();
+    if (!node.isDir) {
+      return node.name.toLowerCase().includes(ql) ? node : null;
+    }
+    const kept = (node.children || [])
+      .map((c) => filterNode(c, ql))
+      .filter((c): c is TreeNode => c !== null);
+    if (kept.length === 0 && !node.name.toLowerCase().includes(ql)) return null;
+    return { ...node, children: kept };
+  };
+
+  const root = filterNode(tree.root, search.trim()) ?? tree.root;
+
+  return (
+    <div
+      className="w-full rounded-2xl border border-card-border bg-card overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-400"
+      style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.4)", animationDelay: `${index * 50}ms` }}
+    >
+      <button
+        onClick={() => setExpanded((e) => !e)}
+        className="w-full flex items-center gap-3 p-4 sm:p-5 hover:bg-accent/30 transition-colors text-left"
+      >
+        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500/20 to-blue-500/20 border border-purple-500/30 flex items-center justify-center flex-shrink-0">
+          <FolderOpen className="w-6 h-6 text-purple-400" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-foreground mb-0.5">
+            Folder · {tree.totalFiles} files{tree.totalFolders > 0 && ` in ${tree.totalFolders} subfolders`}
+          </p>
+          <p className="text-xs text-muted-foreground truncate" title={url}>
+            {tree.totalSizeText} · {url}
+          </p>
+        </div>
+        {expanded ? (
+          <ChevronUp className="w-5 h-5 text-muted-foreground flex-shrink-0" />
+        ) : (
+          <ChevronDown className="w-5 h-5 text-muted-foreground flex-shrink-0" />
+        )}
+      </button>
+
+      {expanded && (
+        <div className="border-t border-card-border">
+          <div className="p-3 sm:p-4 border-b border-card-border bg-secondary/20">
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search files..."
+              className="w-full px-3 py-2 rounded-lg bg-input border border-input text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+            />
+          </div>
+          <div className="max-h-[600px] overflow-y-auto p-2">
+            {(root.children || []).map((child, i) => (
+              <TreeRow
+                key={`${child.path}-${i}`}
+                node={child}
+                depth={0}
+                copiedUrl={copiedUrl}
+                onCopy={onCopy}
+              />
+            ))}
+            {(!root.children || root.children.length === 0) && (
+              <p className="text-center text-sm text-muted-foreground py-8">No files match your search.</p>
+            )}
+          </div>
+          <div className="p-3 border-t border-card-border bg-secondary/10 text-xs text-muted-foreground text-center">
+            Click any file to open it on TeraBox in a new tab.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface TreeRowProps {
+  node: TreeNode;
+  depth: number;
+  copiedUrl: string | null;
+  onCopy: (text: string) => void;
+}
+
+function TreeRow({ node, depth, copiedUrl, onCopy }: TreeRowProps) {
+  const [open, setOpen] = useState(depth < 1);
+
+  if (node.isDir) {
+    const childCount = (node.children || []).length;
+    return (
+      <div className="mb-1">
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-accent/40 transition-colors text-left"
+          style={{ paddingLeft: `${depth * 16 + 8}px` }}
+        >
+          {open ? (
+            <ChevronDown className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+          ) : (
+            <ChevronRight className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+          )}
+          <Folder className="w-4 h-4 text-purple-400 flex-shrink-0" />
+          <span className="text-sm font-medium text-foreground truncate">{node.name}</span>
+          <span className="text-xs text-muted-foreground ml-auto flex-shrink-0">{childCount} items</span>
+        </button>
+        {open && (
+          <div>
+            {(node.children || []).map((child, i) => (
+              <TreeRow
+                key={`${child.path}-${i}`}
+                node={child}
+                depth={depth + 1}
+                copiedUrl={copiedUrl}
+                onCopy={onCopy}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // File row
+  const isVideo = (node.category === 1) || /\.(mp4|mkv|webm|mov|avi|flv|wmv|m4v)$/i.test(node.name);
+  const teraboxUrl = `https://1024terabox.com/sharing/link?surl=${node.shorturl}&path=${encodeURIComponent(
+    node.path
+  )}`;
+  return (
+    <div
+      className="flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-accent/30 transition-colors group"
+      style={{ paddingLeft: `${depth * 16 + 8}px` }}
+    >
+      <div className="w-4 flex-shrink-0" />
+      {node.thumbnail ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={node.thumbnail}
+          alt=""
+          className="w-10 h-10 rounded object-cover bg-secondary flex-shrink-0"
+          loading="lazy"
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).style.display = "none";
+          }}
+        />
+      ) : isVideo ? (
+        <div className="w-10 h-10 rounded bg-secondary flex items-center justify-center flex-shrink-0">
+          <FileVideo className="w-4 h-4 text-muted-foreground" />
+        </div>
+      ) : (
+        <div className="w-10 h-10 rounded bg-secondary flex items-center justify-center flex-shrink-0">
+          <FileIcon className="w-4 h-4 text-muted-foreground" />
+        </div>
+      )}
+      <div className="flex-1 min-w-0">
+        <p className="text-sm text-foreground truncate" title={node.name}>
+          {node.name}
+        </p>
+        <p className="text-xs text-muted-foreground">{node.sizeText}</p>
+      </div>
+      <a
+        href={teraboxUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-semibold bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 transition-all flex-shrink-0"
+        title="Open file on TeraBox"
+      >
+        <ExternalLink className="w-3 h-3" />
+        Open
+      </a>
+      <button
+        onClick={() => onCopy(teraboxUrl)}
+        className="flex items-center gap-1 px-2 py-1.5 rounded-md text-xs border border-input bg-secondary hover:bg-accent text-secondary-foreground transition-all flex-shrink-0"
+        title="Copy file link"
+      >
+        {copiedUrl === teraboxUrl ? (
+          <Check className="w-3 h-3 text-green-400" />
+        ) : (
+          <Copy className="w-3 h-3" />
+        )}
+      </button>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { logger } from "./logger";
 import { fetchTeraboxInfo, type TeraboxFileData } from "./teraboxApi";
+import { fetchTeraboxFolderTree, type TeraboxTreeNode } from "./teraboxFolderApi";
 
 interface BotState {
   token: string;
@@ -264,8 +265,30 @@ async function handleUpdate(state: BotState, update: TgUpdate): Promise<void> {
   let processedHere = 0;
   for (const url of urls) {
     try {
-      const result = await fetchTeraboxInfo(url);
-      const filesInLink = result.data || [];
+      let filesInLink: TeraboxFileData[] = [];
+      let usedTree = false;
+      try {
+        const result = await fetchTeraboxInfo(url);
+        filesInLink = result.data || [];
+      } catch (err) {
+        const code = (err as { code?: string }).code;
+        if (code !== "LINK_INVALID") throw err;
+        // Fall back to nested folder tree (for folders with subfolders)
+        usedTree = true;
+        const tree = await fetchTeraboxFolderTree(url);
+        await tgCall(state.token, "sendMessage", {
+          chat_id: chatId,
+          text:
+            `📂 *Nested folder detected*\n` +
+            `${tree.totalFiles} files in ${tree.totalFolders} subfolders \\(${escapeMdV2(tree.totalSizeText)}\\)\n\n` +
+            `I can\\'t direct\\-download nested files, so I\\'ll send the file list with TeraBox links\\.`,
+          parse_mode: "MarkdownV2",
+        }).catch(() => {});
+        await sendFolderTreeListing(state.token, chatId, tree.root);
+        processedHere += tree.totalFiles;
+        continue;
+      }
+
       if (filesInLink.length === 0) {
         throw new Error("No files found in this link.");
       }
@@ -300,6 +323,7 @@ async function handleUpdate(state: BotState, update: TgUpdate): Promise<void> {
           disable_web_page_preview: true,
         }).catch(() => {});
       }
+      void usedTree;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : "Unknown error";
       await tgCall(state.token, "sendMessage", {
@@ -317,6 +341,54 @@ async function handleUpdate(state: BotState, update: TgUpdate): Promise<void> {
     tgCall(state.token, "deleteMessage", {
       chat_id: chatId,
       message_id: placeholder.result.message_id,
+    }).catch(() => {});
+  }
+}
+
+async function sendFolderTreeListing(
+  token: string,
+  chatId: number,
+  root: TeraboxTreeNode,
+): Promise<void> {
+  // Flatten files with their parent folder path
+  const collected: { folder: string; node: TeraboxTreeNode }[] = [];
+  const walk = (n: TeraboxTreeNode, parentPath: string): void => {
+    if (collected.length >= 100) return;
+    if (n.isDir) {
+      const here = parentPath ? `${parentPath}/${n.name}` : n.name;
+      for (const c of n.children || []) walk(c, here);
+    } else {
+      collected.push({ folder: parentPath || "/", node: n });
+    }
+  };
+  for (const c of root.children || []) walk(c, "");
+
+  // Group by folder, send one message per folder (Telegram message limit 4096 chars)
+  const groups = new Map<string, TeraboxTreeNode[]>();
+  for (const item of collected) {
+    if (!groups.has(item.folder)) groups.set(item.folder, []);
+    groups.get(item.folder)!.push(item.node);
+  }
+
+  for (const [folder, files] of groups) {
+    const header = `📁 *${escapeMdV2(folder)}* \\(${files.length} files\\)\n\n`;
+    const lines = files.slice(0, 30).map((f) => {
+      const teraboxUrl = `https://1024terabox.com/sharing/link?surl=${f.shorturl}&path=${encodeURIComponent(f.path)}`;
+      return `• [${escapeMdV2(f.name)}](${teraboxUrl}) \\- ${escapeMdV2(f.sizeText)}`;
+    });
+    const text = header + lines.join("\n") + (files.length > 30 ? `\n\n_\\.\\.\\.and ${files.length - 30} more_` : "");
+    await tgCall(token, "sendMessage", {
+      chat_id: chatId,
+      text,
+      parse_mode: "MarkdownV2",
+      disable_web_page_preview: true,
+    }).catch(() => {});
+  }
+
+  if (collected.length >= 100) {
+    await tgCall(token, "sendMessage", {
+      chat_id: chatId,
+      text: "ℹ️ Folder has more than 100 files. Showing the first 100.",
     }).catch(() => {});
   }
 }
