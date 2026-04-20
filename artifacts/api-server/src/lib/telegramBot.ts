@@ -66,6 +66,11 @@ function escapeMdV2(text: string): string {
   return text.replace(/[_*\[\]()~`>#+\-=|{}.!\\]/g, (c) => `\\${c}`);
 }
 
+// Inside MarkdownV2 code spans (`...`) only ` and \ need escaping.
+function escapeMdV2Code(text: string): string {
+  return text.replace(/[`\\]/g, (c) => `\\${c}`);
+}
+
 export interface PublicBotInfo {
   username: string;
   firstName: string;
@@ -317,7 +322,7 @@ function buildReferText(user: BotUser, botUsername: string): string {
   return (
     `🎁 *Refer & Get Premium*\n\n` +
     `Share your link\\. Every *${REFERRALS_FOR_PREMIUM}* friends who join with it = *${PREMIUM_DAYS_PER_REWARD} days* of Premium\\.\n\n` +
-    `🔗 Your link:\n\`${escapeMdV2(link)}\`\n\n` +
+    `🔗 Your link:\n\`${escapeMdV2Code(link)}\`\n\n` +
     `👥 Total referrals: *${user.referralCount}*\n` +
     `⏭ Next reward in: *${remaining}* more friend${remaining === 1 ? "" : "s"}\n` +
     `${premium ? `💎 Premium active until *${escapeMdV2(expiry || "")}*` : `🆓 Status: Free user`}`
@@ -331,7 +336,7 @@ function buildMeText(user: BotUser): string {
     : null;
   return (
     `👤 *Your Account*\n\n` +
-    `🆔 ID: \`${user.telegramId}\`\n` +
+    `🆔 ID: \`${escapeMdV2Code(String(user.telegramId))}\`\n` +
     `👥 Referrals: *${user.referralCount}*\n` +
     `${premium ? `💎 *Premium* until ${escapeMdV2(expiry || "")}` : `🆓 Free user`}\n\n` +
     (premium
