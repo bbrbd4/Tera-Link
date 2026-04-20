@@ -1,5 +1,5 @@
 import { db, botUsersTable, botReferralsTable, type BotUser } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { logger } from "./logger";
 import { fetchTeraboxInfo, type TeraboxFileData } from "./teraboxApi";
 import { fetchTeraboxFolderTree, type TeraboxTreeNode } from "./teraboxFolderApi";
@@ -276,21 +276,18 @@ async function applyReferral(
     .set({ referredBy: referrer.telegramId })
     .where(eq(botUsersTable.telegramId, newUserId));
 
-  // Increment referrer counter and grant premium days every Nth referral
-  const baseDate = new Date(
-    Math.max(Date.now(), referrer.premiumUntil?.getTime() ?? 0),
-  );
-  const newCount = referrer.referralCount + 1;
-  const grantsPremium = newCount % REFERRALS_FOR_PREMIUM === 0;
-  const newPremiumUntil = grantsPremium
-    ? new Date(baseDate.getTime() + PREMIUM_DAYS_PER_REWARD * 24 * 3600 * 1000)
-    : referrer.premiumUntil;
-
+  // Atomically: increment referral_count, and if (count+1) % N == 0 grant
+  // PREMIUM_DAYS_PER_REWARD days extending the later of NOW() and premium_until.
   const [updatedReferrer] = await db
     .update(botUsersTable)
     .set({
-      referralCount: newCount,
-      premiumUntil: newPremiumUntil,
+      referralCount: sql`${botUsersTable.referralCount} + 1`,
+      premiumUntil: sql`CASE
+        WHEN ((${botUsersTable.referralCount} + 1) % ${REFERRALS_FOR_PREMIUM}) = 0
+        THEN GREATEST(COALESCE(${botUsersTable.premiumUntil}, NOW()), NOW())
+             + make_interval(days => ${PREMIUM_DAYS_PER_REWARD})
+        ELSE ${botUsersTable.premiumUntil}
+      END`,
     })
     .where(eq(botUsersTable.telegramId, referrer.telegramId))
     .returning();
@@ -478,7 +475,7 @@ async function handleUpdate(state: BotState, update: TgUpdate): Promise<void> {
             parse_mode: "MarkdownV2",
           }).catch(() => {});
         }
-        await sendFolderTreeListing(state.token, chatId, tree.root, premium ? 100 : 20);
+        await sendFolderTreeListing(state.token, chatId, tree.root, folderLimit);
         processedHere += tree.totalFiles;
         continue;
       }
