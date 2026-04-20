@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { fetchTeraboxInfo } from "../lib/teraboxApi";
 import { fetchTeraboxFolderTree } from "../lib/teraboxFolderApi";
 import { extractTeraboxDlink } from "../lib/teraboxDlink";
+import { proxyTeraboxDlink } from "../lib/teraboxStreamProxy";
 
 const router: IRouter = Router();
 
@@ -79,6 +80,33 @@ router.get("/terabox/dlink", async (req, res) => {
       clientMsg = "TeraBox took too long to respond. Please try again.";
     }
     res.status(502).json({ success: false, error: clientMsg });
+  }
+});
+
+router.get("/terabox/stream", async (req, res) => {
+  const surl = req.query["surl"];
+  const dir = req.query["dir"];
+  const fsId = req.query["fsId"];
+  const dl = req.query["dl"] === "1";
+  if (
+    typeof surl !== "string" ||
+    typeof dir !== "string" ||
+    typeof fsId !== "string" ||
+    !surl ||
+    !dir ||
+    !fsId
+  ) {
+    res.status(400).end("Missing parameters");
+    return;
+  }
+  try {
+    const info = await extractTeraboxDlink(surl, dir, fsId);
+    await proxyTeraboxDlink(info.dlink, info.filename, dl, req, res);
+  } catch (err) {
+    req.log.error({ err, surl, dir, fsId }, "Stream proxy failed");
+    if (!res.headersSent) {
+      res.status(502).end("Could not stream this file. Please try again.");
+    }
   }
 });
 

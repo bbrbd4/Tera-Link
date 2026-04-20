@@ -1276,8 +1276,8 @@ interface TreeRowProps {
 
 type DlinkState =
   | { status: "idle" }
-  | { status: "loading" }
-  | { status: "ready"; dlink: string; filename?: string }
+  | { status: "checking" }
+  | { status: "ready" }
   | { status: "error"; message: string };
 
 function TreeRow({ node, depth, copiedUrl, onCopy }: TreeRowProps) {
@@ -1285,54 +1285,56 @@ function TreeRow({ node, depth, copiedUrl, onCopy }: TreeRowProps) {
   const [dlinkState, setDlinkState] = useState<DlinkState>({ status: "idle" });
   const [showPlayer, setShowPlayer] = useState(false);
 
-  const fetchDlink = async (): Promise<{ dlink: string; filename?: string } | null> => {
-    if (dlinkState.status === "ready") return dlinkState;
-    if (dlinkState.status === "loading") return null;
-    setDlinkState({ status: "loading" });
+  const parentDir = node.path.includes("/")
+    ? node.path.substring(0, node.path.lastIndexOf("/")) || "/"
+    : "/";
+  const baseParams = new URLSearchParams({
+    surl: node.shorturl || "",
+    dir: parentDir,
+    fsId: String(node.fsId || ""),
+  }).toString();
+  const streamUrl = `/api/terabox/stream?${baseParams}`;
+  const downloadUrl = `${streamUrl}&dl=1`;
+
+  const ensureLink = async (): Promise<boolean> => {
+    if (dlinkState.status === "ready") return true;
+    if (dlinkState.status === "checking") return false;
+    setDlinkState({ status: "checking" });
     try {
-      const parentDir = node.path.includes("/")
-        ? node.path.substring(0, node.path.lastIndexOf("/")) || "/"
-        : "/";
-      const params = new URLSearchParams({
-        surl: node.shorturl || "",
-        dir: parentDir,
-        fsId: String(node.fsId || ""),
-      });
-      const res = await fetch(`/api/terabox/dlink?${params.toString()}`);
+      const res = await fetch(`/api/terabox/dlink?${baseParams}`);
       const data = (await res.json()) as {
         success: boolean;
-        dlink?: string;
-        filename?: string;
         error?: string;
       };
-      if (!data.success || !data.dlink) {
+      if (!data.success) {
         setDlinkState({ status: "error", message: data.error || "Failed to get link" });
-        return null;
+        return false;
       }
-      setDlinkState({ status: "ready", dlink: data.dlink, filename: data.filename });
-      return { dlink: data.dlink, filename: data.filename };
+      setDlinkState({ status: "ready" });
+      return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Network error";
       setDlinkState({ status: "error", message: msg });
-      return null;
+      return false;
     }
   };
 
   const handleWatch = async () => {
     setShowPlayer(true);
-    if (dlinkState.status !== "ready") await fetchDlink();
+    await ensureLink();
   };
 
   const handleDownload = async () => {
-    const r = await fetchDlink();
-    if (!r) return;
-    const a = document.createElement("a");
-    a.href = r.dlink;
-    a.download = r.filename || node.name;
-    a.rel = "noopener noreferrer";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    const ok = await ensureLink();
+    if (!ok) return;
+    window.location.href = downloadUrl;
+  };
+
+  const handleCopy = async () => {
+    const ok = await ensureLink();
+    if (!ok) return;
+    const fullUrl = new URL(downloadUrl, window.location.origin).href;
+    onCopy(fullUrl);
   };
 
   if (node.isDir) {
@@ -1409,7 +1411,7 @@ function TreeRow({ node, depth, copiedUrl, onCopy }: TreeRowProps) {
       {isVideo && (
         <button
           onClick={handleWatch}
-          disabled={dlinkState.status === "loading"}
+          disabled={dlinkState.status === "checking"}
           className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-semibold bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 border border-purple-500/40 transition-all flex-shrink-0 disabled:opacity-60"
           title="Watch this video here"
         >
@@ -1419,11 +1421,11 @@ function TreeRow({ node, depth, copiedUrl, onCopy }: TreeRowProps) {
       )}
       <button
         onClick={handleDownload}
-        disabled={dlinkState.status === "loading"}
+        disabled={dlinkState.status === "checking"}
         className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-semibold bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 transition-all flex-shrink-0 disabled:opacity-60"
         title="Download file"
       >
-        {dlinkState.status === "loading" ? (
+        {dlinkState.status === "checking" ? (
           <Loader2 className="w-3 h-3 animate-spin" />
         ) : (
           <Download className="w-3 h-3" />
@@ -1431,14 +1433,11 @@ function TreeRow({ node, depth, copiedUrl, onCopy }: TreeRowProps) {
         Download
       </button>
       <button
-        onClick={async () => {
-          const r = await fetchDlink();
-          if (r) onCopy(r.dlink);
-        }}
+        onClick={handleCopy}
         className="flex items-center gap-1 px-2 py-1.5 rounded-md text-xs border border-input bg-secondary hover:bg-accent text-secondary-foreground transition-all flex-shrink-0"
         title="Copy direct link"
       >
-        {dlinkState.status === "ready" && copiedUrl === dlinkState.dlink ? (
+        {copiedUrl && copiedUrl.endsWith(downloadUrl) ? (
           <Check className="w-3 h-3 text-green-400" />
         ) : (
           <Copy className="w-3 h-3" />
@@ -1474,7 +1473,7 @@ function TreeRow({ node, depth, copiedUrl, onCopy }: TreeRowProps) {
               </button>
             </div>
             <div className="bg-black flex items-center justify-center" style={{ minHeight: "60vh" }}>
-              {dlinkState.status === "loading" && (
+              {dlinkState.status === "checking" && (
                 <div className="flex items-center gap-2 text-muted-foreground py-12">
                   <Loader2 className="w-5 h-5 animate-spin" />
                   <span className="text-sm">Preparing stream...</span>
@@ -1485,11 +1484,12 @@ function TreeRow({ node, depth, copiedUrl, onCopy }: TreeRowProps) {
               )}
               {dlinkState.status === "ready" && (
                 <video
-                  src={dlinkState.dlink}
+                  src={streamUrl}
                   controls
                   autoPlay
+                  playsInline
+                  preload="metadata"
                   className="w-full max-h-[80vh]"
-                  crossOrigin="anonymous"
                 >
                   Your browser does not support video playback.
                 </video>
