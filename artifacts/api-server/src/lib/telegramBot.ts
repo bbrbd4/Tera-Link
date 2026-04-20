@@ -645,9 +645,13 @@ async function sendFileResult(
   file: TeraboxFileData,
 ): Promise<void> {
   const streamUrl = file.stream_final_url || file.new_stream_url || file.stream_url || "";
-  const isVideo =
-    /\.(mp4|mkv|mov|webm|m4v|avi)$/i.test(file.file_name) ||
-    (file.extension && /^(mp4|mkv|mov|webm|m4v|avi)$/i.test(file.extension));
+  const VIDEO_EXT_RE = /^(mp4|mkv|mov|webm|m4v|avi|3gp|flv|ts|mpg|mpeg|wmv)$/i;
+  const isVideo = Boolean(
+    /\.(mp4|mkv|mov|webm|m4v|avi|3gp|flv|ts|mpg|mpeg|wmv)$/i.test(file.file_name) ||
+      (file.extension && VIDEO_EXT_RE.test(file.extension)) ||
+      // Fallback: TeraBox shares are nearly always videos when a duration is present
+      (file.duration && file.duration !== "00:00"),
+  );
 
   const sizeBytes = Number(file.file_size_bytes) || 0;
   const canSendDirectly =
@@ -807,6 +811,8 @@ async function handleCallbackQuery(
       if (contentLen > TG_UPLOAD_VIDEO_LIMIT) {
         throw new Error("File too large for Telegram (50MB limit).");
       }
+      const ct = (res.headers.get("content-type") || "").toLowerCase();
+      if (ct.startsWith("video/")) pd.isVideo = true;
       const ab = await res.arrayBuffer();
       if (ab.byteLength > TG_UPLOAD_VIDEO_LIMIT) {
         throw new Error("File too large for Telegram (50MB limit).");
