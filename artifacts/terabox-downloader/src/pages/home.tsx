@@ -1314,9 +1314,13 @@ function TreeRow({ node, depth, copiedUrl, onCopy }: TreeRowProps) {
 
   // File row
   const isVideo = (node.category === 1) || /\.(mp4|mkv|webm|mov|avi|flv|wmv|m4v)$/i.test(node.name);
-  const teraboxUrl = `https://1024terabox.com/sharing/link?surl=${node.shorturl}&path=${encodeURIComponent(
+  // Best deep-link to the specific file inside the share — opens TeraBox web player / download UI
+  const teraboxFileUrl = `https://www.terabox.com/sharing/link?surl=${node.shorturl}&path=${encodeURIComponent(
     node.path
   )}`;
+  // Try our own re-fetch for this specific file path via a synthesized URL
+  const refetchUrl = `https://1024terabox.com/s/1${node.shorturl}?path=${encodeURIComponent(node.path)}`;
+
   return (
     <div
       className="flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-accent/30 transition-colors group"
@@ -1349,22 +1353,34 @@ function TreeRow({ node, depth, copiedUrl, onCopy }: TreeRowProps) {
         </p>
         <p className="text-xs text-muted-foreground">{node.sizeText}</p>
       </div>
+      {isVideo && (
+        <a
+          href={teraboxFileUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-semibold bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 border border-purple-500/40 transition-all flex-shrink-0"
+          title="Watch this video on TeraBox"
+        >
+          <Play className="w-3 h-3" />
+          Watch
+        </a>
+      )}
       <a
-        href={teraboxUrl}
+        href={teraboxFileUrl}
         target="_blank"
         rel="noopener noreferrer"
         className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-semibold bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 transition-all flex-shrink-0"
-        title="Open file on TeraBox"
+        title="Download from TeraBox"
       >
-        <ExternalLink className="w-3 h-3" />
-        Open
+        <Download className="w-3 h-3" />
+        Download
       </a>
       <button
-        onClick={() => onCopy(teraboxUrl)}
+        onClick={() => onCopy(refetchUrl)}
         className="flex items-center gap-1 px-2 py-1.5 rounded-md text-xs border border-input bg-secondary hover:bg-accent text-secondary-foreground transition-all flex-shrink-0"
         title="Copy file link"
       >
-        {copiedUrl === teraboxUrl ? (
+        {copiedUrl === refetchUrl ? (
           <Check className="w-3 h-3 text-green-400" />
         ) : (
           <Copy className="w-3 h-3" />
