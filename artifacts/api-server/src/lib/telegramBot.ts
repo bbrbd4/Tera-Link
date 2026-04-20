@@ -793,9 +793,16 @@ async function handleCallbackQuery(
     try {
       const res = await fetch(pd.url, {
         signal: controller.signal,
-        headers: { "User-Agent": "Mozilla/5.0" },
+        redirect: "follow",
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+          Referer: "https://www.terabox.com/",
+          Accept: "*/*",
+          "Accept-Encoding": "identity",
+        },
       });
-      if (!res.ok) throw new Error(`upstream ${res.status}`);
+      if (!res.ok) throw new Error(`upstream HTTP ${res.status}`);
       const contentLen = Number(res.headers.get("content-length") || "0");
       if (contentLen > TG_UPLOAD_VIDEO_LIMIT) {
         throw new Error("File too large for Telegram (50MB limit).");
